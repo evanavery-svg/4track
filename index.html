@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Four Track</title>
+<meta name="description" content="A minimalist four-track recorder for demos. Record, overdub, mix and export — right in your browser.">
+<meta name="theme-color" content="#f2f1ee">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Four Track">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="app-header">
+  <div class="header-row">
+    <input id="projectName" class="project-name" value="New Demo" maxlength="40"
+           aria-label="Project name" autocomplete="off" spellcheck="false">
+    <button id="settingsBtn" class="icon-btn" aria-label="Settings" title="Settings">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 8.5A3.5 3.5 0 1 0 12 15.5 3.5 3.5 0 0 0 12 8.5zm9.2 4.9.1-1.4-.1-1.4-2.1-.5a7.4 7.4 0 0 0-.7-1.6l1.2-1.9-2-2-1.9 1.2a7.4 7.4 0 0 0-1.6-.7L13.4 3h-2.8l-.5 2.1a7.4 7.4 0 0 0-1.6.7L6.6 4.6l-2 2 1.2 1.9a7.4 7.4 0 0 0-.7 1.6l-2.1.5-.1 1.4.1 1.4 2.1.5c.2.6.4 1.1.7 1.6l-1.2 1.9 2 2 1.9-1.2c.5.3 1 .5 1.6.7l.5 2.1h2.8l.5-2.1c.6-.2 1.1-.4 1.6-.7l1.9 1.2 2-2-1.2-1.9c.3-.5.5-1 .7-1.6l2.1-.5z"/></svg>
+    </button>
+  </div>
+  <div class="time-row">
+    <div id="timeDisplay" class="time-display">0:00<span class="time-frac">.0</span></div>
+    <div id="lengthDisplay" class="length-display">&nbsp;</div>
+  </div>
+</header>
+
+<main id="tracks" class="tracks" aria-label="Tracks"></main>
+
+<footer class="transport">
+  <button id="rtzBtn" class="t-btn" aria-label="Return to start" title="Return to start (Enter)">
+    <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M6 5h2v14H6zM20 5v14L9.5 12z"/></svg>
+  </button>
+  <button id="playBtn" class="t-btn t-play" aria-label="Play" title="Play / Stop (Space)">
+    <svg class="ic-play" viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M8 5.1v13.8c0 .8.9 1.3 1.6.9l10.8-6.9c.6-.4.6-1.4 0-1.8L9.6 4.2c-.7-.4-1.6.1-1.6.9z"/></svg>
+    <svg class="ic-stop" viewBox="0 0 24 24" width="26" height="26"><rect fill="currentColor" x="6" y="6" width="12" height="12" rx="2"/></svg>
+  </button>
+  <button id="loopBtn" class="t-btn t-toggle" aria-label="Loop" aria-pressed="false" title="Loop (L)">
+    <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M17 7H7a4 4 0 0 0 0 8h1v-2H7a2 2 0 0 1 0-4h10a2 2 0 0 1 0 4h-4.6l1.8-1.8L12.8 9.8 8.6 14l4.2 4.2 1.4-1.4-1.8-1.8H17a4 4 0 0 0 0-8z"/></svg>
+  </button>
+  <button id="metBtn" class="t-btn t-toggle" aria-label="Metronome" aria-pressed="false" title="Metronome (M)">
+    <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M9.6 3h4.8L18 19H6L8.5 6.2 14.8 12l1.1-1.2-6.2-5.7L9.6 3zM12 14.2a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2z"/></svg>
+  </button>
+  <div class="bpm-ctl" title="Tempo">
+    <button id="bpmDown" class="bpm-step" aria-label="Slower">−</button>
+    <button id="bpmTap" class="bpm-value" aria-label="Tap tempo"><span id="bpmNum">120</span><span class="bpm-unit">bpm</span></button>
+    <button id="bpmUp" class="bpm-step" aria-label="Faster">+</button>
+  </div>
+  <button id="exportBtn" class="t-btn" aria-label="Export mix" title="Export mix as WAV (E)">
+    <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M11 3h2v10.2l3.6-3.6L18 11l-6 6-6-6 1.4-1.4L11 13.2zM4 19h16v2H4z"/></svg>
+  </button>
+</footer>
+
+<div id="settingsSheet" class="sheet" hidden>
+  <div class="sheet-card" role="dialog" aria-label="Settings" aria-modal="true">
+    <div class="sheet-handle"></div>
+    <h2>Settings</h2>
+    <label class="set-row">
+      <span>Count-in <small>one bar of clicks before recording</small></span>
+      <input type="checkbox" id="setCountIn" class="switch" checked>
+    </label>
+    <label class="set-row">
+      <span>Metronome while recording <small>clicks stay out of the mix</small></span>
+      <input type="checkbox" id="setMetRec" class="switch" checked>
+    </label>
+    <label class="set-row">
+      <span>Metronome volume</span>
+      <input type="range" id="setMetVol" min="0" max="100" value="60">
+    </label>
+    <label class="set-row">
+      <span>Recording alignment <small id="latencyLabel">auto + 0 ms</small></span>
+      <input type="range" id="setLatency" min="-150" max="150" value="0" step="5">
+    </label>
+    <div class="set-actions">
+      <button id="clearProjectBtn" class="danger-btn">Erase project</button>
+      <button id="closeSettingsBtn" class="primary-btn">Done</button>
+    </div>
+    <p class="set-hint">Shortcuts — Space play · 1-4 record track · M metronome · L loop · E export</p>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
