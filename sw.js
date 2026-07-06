@@ -1,6 +1,10 @@
 'use strict';
 
-const CACHE = 'fourtrack-v1';
+/* Crumple service worker — network-first so every open picks up the latest
+   version, with the cache as an offline fallback. Bump VERSION on release. */
+
+const VERSION = '0.1';
+const CACHE = `crumple-v${VERSION}`;
 const ASSETS = [
   '.',
   'index.html',
@@ -28,16 +32,20 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
+  if (new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(
-    caches.match(e.request, { ignoreSearch: true }).then((hit) => {
-      if (hit) return hit;
-      return fetch(e.request).then((resp) => {
-        if (resp.ok && new URL(e.request.url).origin === location.origin) {
+    fetch(e.request)
+      .then((resp) => {
+        if (resp.ok) {
           const copy = resp.clone();
           caches.open(CACHE).then((c) => c.put(e.request, copy));
         }
         return resp;
-      }).catch(() => (e.request.mode === 'navigate' ? caches.match('index.html') : undefined));
-    })
+      })
+      .catch(() =>
+        caches.match(e.request, { ignoreSearch: true }).then(
+          (hit) => hit || (e.request.mode === 'navigate' ? caches.match('index.html') : Response.error())
+        )
+      )
   );
 });

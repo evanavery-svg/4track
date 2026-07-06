@@ -1,10 +1,27 @@
 'use strict';
 
-/* Four Track — a minimalist 4-track recorder.
+/* Crumple — a minimalist 4-track recorder.
    Web Audio + MediaRecorder, no dependencies. */
 
+const APP_VERSION = '0.1';
 const NUM_TRACKS = 4;
 const BEATS_PER_BAR = 4;
+
+const THEMES = {
+  paper:    { label: 'Paper',    sw: ['#f2f1ee', '#ffffff', '#1c1c1e'] },
+  kraft:    { label: 'Kraft',    sw: ['#e7dcc7', '#f8f2e4', '#3b3226'] },
+  blush:    { label: 'Blush',    sw: ['#f3e3e1', '#fcf5f4', '#40312f'] },
+  mint:     { label: 'Mint',     sw: ['#e2ece4', '#f5faf6', '#26352b'] },
+  butter:   { label: 'Butter',   sw: ['#f2ead0', '#fbf7e9', '#3d3620'] },
+  slate:    { label: 'Slate',    sw: ['#e4e8ee', '#f5f7fa', '#232a33'] },
+  graphite: { label: 'Graphite', sw: ['#161618', '#232326', '#f0f0f2'] },
+  midnight: { label: 'Midnight', sw: ['#10161f', '#1b2430', '#edf2f9'] },
+};
+
+const ACCENTS = {
+  blue: '#007aff', teal: '#30b0c7', green: '#34c759',
+  orange: '#ff9500', pink: '#ff2d55', purple: '#af52de',
+};
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -131,6 +148,10 @@ const app = {
   latencyMs: 0,
   nextBeat: 0,
   schedTimer: null,
+
+  projectId: null,
+  projectsMeta: [],     // [{ id, name, updated, length, bpm }]
+  prefs: { theme: 'paper', accent: 'blue', texture: 1, lastProject: null },
 
   tracks: [],           // { buffer, prevBuffer, name, volume, pan, muted, gainNode, panNode, ui:{} }
   wakeLock: null,
@@ -299,7 +320,6 @@ async function toggleRecord(i) {
   try { stream = await getMic(); }
   catch (_) { toast('Microphone access is needed to record'); return; }
 
-  const t = app.tracks[i];
   const mime = pickMime();
   app.recChunks = [];
   app.recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
@@ -391,6 +411,12 @@ function peakOf(buffer) {
 
 /* ---------------- waveforms ---------------- */
 
+let waveInk = 'rgba(60, 58, 54, 0.72)';
+function refreshWaveInk() {
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--wave-ink').trim();
+  if (v) waveInk = v;
+}
+
 function computePeaks(buffer, buckets) {
   const d = buffer.getChannelData(0);
   const per = d.length / buckets;
@@ -427,9 +453,9 @@ function drawWave(i) {
   const buckets = Math.max(1, Math.floor((w * frac) / (barW + gap)));
   const peaks = computePeaks(t.buffer, buckets);
   const mid = h / 2;
-  g.fillStyle = 'rgba(60, 58, 54, 0.72)';
+  g.fillStyle = waveInk;
   for (let b = 0; b < buckets; b++) {
-    const amp = Math.max(1, peaks[b] * (h * 0.86) / 2 * 2) / 2;
+    const amp = Math.max(1, peaks[b] * (h * 0.86)) / 2;
     const x = b * (barW + gap);
     g.beginPath();
     if (g.roundRect) g.roundRect(x, mid - amp, barW, amp * 2, 1);
@@ -534,7 +560,85 @@ async function exportMix() {
   toast(`Exported “${name}.wav”`);
 }
 
-/* ---------------- persistence ---------------- */
+/* ---------------- appearance ---------------- */
+
+function applyAppearance() {
+  const root = document.documentElement;
+  root.dataset.theme = THEMES[app.prefs.theme] ? app.prefs.theme : 'paper';
+  root.style.setProperty('--accent', ACCENTS[app.prefs.accent] || ACCENTS.blue);
+  root.style.setProperty('--tex-user', String(app.prefs.texture ?? 1));
+  requestAnimationFrame(() => {
+    const c = getComputedStyle(root).getPropertyValue('--paper').trim();
+    if (c) $('meta[name="theme-color"]').setAttribute('content', c);
+    refreshWaveInk();
+    redrawAllWaves();
+  });
+  syncAppearanceUI();
+}
+
+async function savePrefs() {
+  try { await idb.set('prefs', { ...app.prefs }); } catch (_) {}
+}
+
+function buildAppearancePickers() {
+  const grid = $('#themeGrid');
+  grid.innerHTML = '';
+  for (const [key, th] of Object.entries(THEMES)) {
+    const b = document.createElement('button');
+    b.className = 'theme-swatch';
+    b.type = 'button';
+    b.dataset.t = key;
+    b.setAttribute('role', 'radio');
+    b.style.background = th.sw[0];
+    b.innerHTML = `<span class="sw-card" style="background:${th.sw[1]}"><i style="background:${th.sw[2]}"></i></span><b style="color:${th.sw[2]}">${th.label}</b>`;
+    b.addEventListener('click', () => {
+      app.prefs.theme = key;
+      applyAppearance(); savePrefs();
+    });
+    grid.appendChild(b);
+  }
+  const row = $('#accentRow');
+  row.innerHTML = '';
+  for (const [key, color] of Object.entries(ACCENTS)) {
+    const b = document.createElement('button');
+    b.className = 'accent-dot';
+    b.type = 'button';
+    b.dataset.a = key;
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-label', key);
+    b.style.background = color;
+    b.addEventListener('click', () => {
+      app.prefs.accent = key;
+      applyAppearance(); savePrefs();
+    });
+    row.appendChild(b);
+  }
+}
+
+function syncAppearanceUI() {
+  for (const b of document.querySelectorAll('.theme-swatch')) {
+    b.setAttribute('aria-checked', String(b.dataset.t === app.prefs.theme));
+  }
+  for (const b of document.querySelectorAll('.accent-dot')) {
+    b.setAttribute('aria-checked', String(b.dataset.a === app.prefs.accent));
+  }
+  $('#setTexture').value = Math.round((app.prefs.texture ?? 1) * 100);
+}
+
+/* ---------------- projects ---------------- */
+
+const projKey = (id, suffix) => `p:${id}:${suffix}`;
+const newProjectId = () => `p_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+function currentSettings() {
+  return {
+    v: 1,
+    projectName: $('#projectName').value,
+    bpm: app.bpm, loop: app.loop, met: app.met, metRec: app.metRec,
+    metVol: app.metVol, countIn: app.countIn, latencyMs: app.latencyMs,
+    tracks: app.tracks.map(t => ({ name: t.name, volume: t.volume, pan: t.pan, muted: t.muted })),
+  };
+}
 
 let saveTimer = null;
 function saveSettingsSoon() {
@@ -543,77 +647,179 @@ function saveSettingsSoon() {
 }
 
 async function saveSettings() {
+  if (!app.projectId) return;
   try {
-    await idb.set('settings', {
-      v: 1,
-      projectName: $('#projectName').value,
-      bpm: app.bpm, loop: app.loop, met: app.met, metRec: app.metRec,
-      metVol: app.metVol, countIn: app.countIn, latencyMs: app.latencyMs,
-      tracks: app.tracks.map(t => ({ name: t.name, volume: t.volume, pan: t.pan, muted: t.muted })),
-    });
+    await idb.set(projKey(app.projectId, 'settings'), currentSettings());
+    const meta = {
+      id: app.projectId,
+      name: $('#projectName').value.trim() || 'Untitled',
+      updated: Date.now(),
+      length: songLength(),
+      bpm: app.bpm,
+    };
+    const idx = app.projectsMeta.findIndex(m => m.id === app.projectId);
+    if (idx >= 0) app.projectsMeta[idx] = meta; else app.projectsMeta.push(meta);
+    await idb.set('projects', app.projectsMeta);
   } catch (_) {}
 }
 
 async function saveTrackAudio(i) {
+  if (!app.projectId) return;
   const t = app.tracks[i];
   try {
-    if (t.buffer) await idb.set(`audio${i}`, { sr: t.buffer.sampleRate, wav: bufferToWav(t.buffer, true) });
-    else await idb.del(`audio${i}`);
+    if (t.buffer) await idb.set(projKey(app.projectId, `audio${i}`), { sr: t.buffer.sampleRate, wav: bufferToWav(t.buffer, true) });
+    else await idb.del(projKey(app.projectId, `audio${i}`));
   } catch (_) { toast('Auto-save failed — storage may be full'); }
 }
 
-async function restore() {
-  try {
-    const s = await idb.get('settings');
-    if (s) {
-      $('#projectName').value = s.projectName || 'New Demo';
-      app.bpm = clamp(s.bpm || 120, 40, 240);
-      app.loop = !!s.loop; app.met = !!s.met;
-      app.metRec = s.metRec !== false;
-      app.metVol = s.metVol ?? 0.6;
-      app.countIn = s.countIn !== false;
-      app.latencyMs = s.latencyMs || 0;
-      (s.tracks || []).forEach((m, i) => {
-        if (!app.tracks[i]) return;
-        Object.assign(app.tracks[i], { name: m.name, volume: m.volume, pan: m.pan, muted: m.muted });
-      });
-    }
-    // decode saved audio with a throwaway offline context (no user gesture needed)
-    const dec = new (window.AudioContext || window.webkitAudioContext)();
-    let any = false;
-    for (let i = 0; i < NUM_TRACKS; i++) {
-      const rec = await idb.get(`audio${i}`);
-      if (rec && rec.wav) {
-        try { app.tracks[i].buffer = await dec.decodeAudioData(rec.wav.slice(0)); any = true; }
-        catch (_) {}
-      }
-    }
-    dec.close && dec.close();
-    for (let i = 0; i < NUM_TRACKS; i++) refreshTrack(i);
-    syncSettingsUI();
-    updateTransportUI();
-    redrawAllWaves();
-    if (any) toast('Project restored');
-  } catch (_) {}
+function applySettings(s) {
+  $('#projectName').value = (s && s.projectName) || 'New Demo';
+  app.bpm = clamp((s && s.bpm) || 120, 40, 240);
+  app.loop = !!(s && s.loop);
+  app.met = !!(s && s.met);
+  app.metRec = !s || s.metRec !== false;
+  app.metVol = (s && s.metVol) ?? 0.6;
+  app.countIn = !s || s.countIn !== false;
+  app.latencyMs = (s && s.latencyMs) || 0;
+  ((s && s.tracks) || []).forEach((m, i) => {
+    if (!app.tracks[i]) return;
+    Object.assign(app.tracks[i], { name: m.name, volume: m.volume, pan: m.pan, muted: m.muted });
+  });
 }
 
-async function eraseProject() {
-  if (!confirm('Erase all tracks and settings? This cannot be undone.')) return;
+async function decodeStoredAudio(rec) {
+  if (!rec || !rec.wav) return null;
+  const ctx = app.ctx || new (window.AudioContext || window.webkitAudioContext)();
+  try { return await ctx.decodeAudioData(rec.wav.slice(0)); }
+  catch (_) { return null; }
+  finally { if (ctx !== app.ctx && ctx.close) ctx.close(); }
+}
+
+async function openProject(id, { quiet = false } = {}) {
   stopAll();
+  if (app.projectId && app.projectId !== id) await saveSettings();
+
+  app.projectId = id;
+  app.pos = 0;
+  const s = await idb.get(projKey(id, 'settings'));
+  applySettings(s);
   for (let i = 0; i < NUM_TRACKS; i++) {
-    app.tracks[i].buffer = null;
-    app.tracks[i].prevBuffer = undefined;
-    Object.assign(app.tracks[i], { name: `Track ${i + 1}`, volume: 0.9, pan: 0, muted: false });
-    await idb.del(`audio${i}`);
+    const t = app.tracks[i];
+    t.prevBuffer = undefined;
+    t.buffer = await decodeStoredAudio(await idb.get(projKey(id, `audio${i}`)));
+    if (t.gainNode) applyTrackGain(t);
+    if (!s || !s.tracks || !s.tracks[i]) Object.assign(t, { name: `Track ${i + 1}`, volume: 0.9, pan: 0, muted: false });
     refreshTrack(i);
   }
-  $('#projectName').value = 'New Demo';
-  app.pos = 0;
-  await idb.del('settings');
+  app.prefs.lastProject = id;
+  savePrefs();
+  syncSettingsUI();
+  updateTransportUI();
   redrawAllWaves();
   drawPlayheads();
-  closeSettings();
-  toast('Project erased');
+  if (!quiet) toast(`Opened “${$('#projectName').value}”`);
+}
+
+async function createProject({ quiet = false } = {}) {
+  stopAll();
+  if (app.projectId) await saveSettings();
+
+  app.projectId = newProjectId();
+  app.pos = 0;
+  applySettings(null);
+  for (let i = 0; i < NUM_TRACKS; i++) {
+    const t = app.tracks[i];
+    t.buffer = null;
+    t.prevBuffer = undefined;
+    Object.assign(t, { name: `Track ${i + 1}`, volume: 0.9, pan: 0, muted: false });
+    if (t.gainNode) applyTrackGain(t);
+    refreshTrack(i);
+  }
+  app.prefs.lastProject = app.projectId;
+  savePrefs();
+  await saveSettings();
+  syncSettingsUI();
+  updateTransportUI();
+  redrawAllWaves();
+  drawPlayheads();
+  if (!quiet) toast('New project');
+}
+
+async function deleteProject(id) {
+  const meta = app.projectsMeta.find(m => m.id === id);
+  const name = (meta && meta.name) || 'this project';
+  if (!confirm(`Delete “${name}”? Its tracks will be gone for good.`)) return;
+  stopAll();
+  await idb.del(projKey(id, 'settings'));
+  for (let i = 0; i < NUM_TRACKS; i++) await idb.del(projKey(id, `audio${i}`));
+  app.projectsMeta = app.projectsMeta.filter(m => m.id !== id);
+  await idb.set('projects', app.projectsMeta);
+
+  if (id === app.projectId) {
+    app.projectId = null;
+    const next = [...app.projectsMeta].sort((a, b) => b.updated - a.updated)[0];
+    if (next) await openProject(next.id, { quiet: true });
+    else await createProject({ quiet: true });
+  }
+  renderProjectList();
+  toast('Project deleted');
+}
+
+function renderProjectList() {
+  const host = $('#projectList');
+  host.innerHTML = '';
+  const metas = [...app.projectsMeta].sort((a, b) => b.updated - a.updated);
+  if (!metas.length) {
+    host.innerHTML = '<p class="proj-empty">No projects yet</p>';
+    return;
+  }
+  for (const m of metas) {
+    const row = document.createElement('div');
+    row.className = 'proj-row' + (m.id === app.projectId ? ' current' : '');
+    const date = new Date(m.updated).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    row.innerHTML = `
+      <button class="proj-open" type="button">
+        <span class="proj-name"></span>
+        <span class="proj-sub">${fmtTime(m.length || 0)} · ${m.bpm || 120} bpm · ${date}</span>
+      </button>
+      <button class="proj-del" type="button" aria-label="Delete project">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zM6 9h12l-.9 11.1a2 2 0 0 1-2 1.9H8.9a2 2 0 0 1-2-1.9L6 9zm4 3v7h1.5v-7H10zm3 0v7h1.5v-7H13z"/></svg>
+      </button>`;
+    $('.proj-name', row).textContent = m.name || 'Untitled';
+    $('.proj-open', row).addEventListener('click', async () => {
+      $('#projectsSheet').hidden = true;
+      if (m.id !== app.projectId) await openProject(m.id);
+    });
+    $('.proj-del', row).addEventListener('click', () => deleteProject(m.id));
+    host.appendChild(row);
+  }
+}
+
+/* Migrate a single-project layout (pre-0.1) into the projects store. */
+async function migrateLegacy() {
+  try {
+    const oldSettings = await idb.get('settings');
+    let hasAudio = false;
+    for (let i = 0; i < NUM_TRACKS; i++) if (await idb.get(`audio${i}`)) hasAudio = true;
+    if (!oldSettings && !hasAudio) return;
+
+    const id = newProjectId();
+    await idb.set(projKey(id, 'settings'), oldSettings || {});
+    for (let i = 0; i < NUM_TRACKS; i++) {
+      const a = await idb.get(`audio${i}`);
+      if (a) await idb.set(projKey(id, `audio${i}`), a);
+      await idb.del(`audio${i}`);
+    }
+    await idb.del('settings');
+    app.projectsMeta.push({
+      id,
+      name: (oldSettings && oldSettings.projectName) || 'New Demo',
+      updated: Date.now(),
+      length: 0,
+      bpm: (oldSettings && oldSettings.bpm) || 120,
+    });
+    await idb.set('projects', app.projectsMeta);
+  } catch (_) {}
 }
 
 /* ---------------- UI ---------------- */
@@ -706,14 +912,14 @@ function buildTracks() {
     t.ui.undoBtn.addEventListener('click', () => {
       if (t.prevBuffer === undefined) return;
       [t.buffer, t.prevBuffer] = [t.prevBuffer, t.buffer];
-      refreshTrack(i); redrawAllWaves(); saveTrackAudio(i);
+      refreshTrack(i); redrawAllWaves(); saveTrackAudio(i); saveSettingsSoon();
       toast(t.buffer ? 'Previous take restored' : 'Take removed — tap ↩︎ to bring it back');
     });
     t.ui.clearBtn.addEventListener('click', () => {
       if (!t.buffer) return;
       t.prevBuffer = t.buffer;
       t.buffer = null;
-      refreshTrack(i); redrawAllWaves(); saveTrackAudio(i);
+      refreshTrack(i); redrawAllWaves(); saveTrackAudio(i); saveSettingsSoon();
       toast('Track cleared — tap ↩︎ to undo');
     });
     t.ui.nameInput.addEventListener('input', () => { t.name = t.ui.nameInput.value; saveSettingsSoon(); });
@@ -773,7 +979,7 @@ function updateTimeUI() {
   $('#lengthDisplay').textContent = total ? `of ${fmtTime(total)} · ${app.bpm} bpm` : 'ready to record';
 }
 
-/* ---------------- settings sheet ---------------- */
+/* ---------------- sheets ---------------- */
 
 function syncSettingsUI() {
   $('#setCountIn').checked = app.countIn;
@@ -783,12 +989,31 @@ function syncSettingsUI() {
   $('#latencyLabel').textContent = `auto ${app.latencyMs >= 0 ? '+' : '−'} ${Math.abs(app.latencyMs)} ms`;
 }
 
-function closeSettings() { $('#settingsSheet').hidden = true; }
+function closeSheets() {
+  $('#settingsSheet').hidden = true;
+  $('#projectsSheet').hidden = true;
+}
 
-function wireSettings() {
-  $('#settingsBtn').addEventListener('click', () => { syncSettingsUI(); $('#settingsSheet').hidden = false; });
-  $('#closeSettingsBtn').addEventListener('click', closeSettings);
-  $('#settingsSheet').addEventListener('click', (e) => { if (e.target === $('#settingsSheet')) closeSettings(); });
+function wireSheets() {
+  $('#settingsBtn').addEventListener('click', () => {
+    syncSettingsUI(); syncAppearanceUI();
+    $('#projectsSheet').hidden = true;
+    $('#settingsSheet').hidden = false;
+  });
+  $('#projectsBtn').addEventListener('click', async () => {
+    await saveSettings();      // so the list shows fresh names/lengths
+    renderProjectList();
+    $('#settingsSheet').hidden = true;
+    $('#projectsSheet').hidden = false;
+  });
+  $('#closeSettingsBtn').addEventListener('click', closeSheets);
+  for (const id of ['settingsSheet', 'projectsSheet']) {
+    $(`#${id}`).addEventListener('click', (e) => { if (e.target === $(`#${id}`)) closeSheets(); });
+  }
+  $('#newProjectBtn').addEventListener('click', async () => {
+    closeSheets();
+    await createProject();
+  });
   $('#setCountIn').addEventListener('change', (e) => { app.countIn = e.target.checked; saveSettingsSoon(); });
   $('#setMetRec').addEventListener('change', (e) => { app.metRec = e.target.checked; saveSettingsSoon(); });
   $('#setMetVol').addEventListener('input', (e) => { app.metVol = e.target.value / 100; saveSettingsSoon(); });
@@ -797,7 +1022,15 @@ function wireSettings() {
     $('#latencyLabel').textContent = `auto ${app.latencyMs >= 0 ? '+' : '−'} ${Math.abs(app.latencyMs)} ms`;
     saveSettingsSoon();
   });
-  $('#clearProjectBtn').addEventListener('click', eraseProject);
+  $('#setTexture').addEventListener('input', (e) => {
+    app.prefs.texture = e.target.value / 100;
+    document.documentElement.style.setProperty('--tex-user', String(app.prefs.texture));
+    savePrefs();
+  });
+  $('#deleteProjectBtn').addEventListener('click', () => {
+    closeSheets();
+    deleteProject(app.projectId);
+  });
 }
 
 /* ---------------- transport wiring ---------------- */
@@ -865,7 +1098,7 @@ function wireKeyboard() {
       case 'm': case 'M': $('#metBtn').click(); break;
       case 'l': case 'L': $('#loopBtn').click(); break;
       case 'e': case 'E': exportMix(); break;
-      case 'Escape': if (app.state !== 'idle') stopAll(); else closeSettings(); break;
+      case 'Escape': if (app.state !== 'idle') stopAll(); else closeSheets(); break;
     }
   });
 }
@@ -883,17 +1116,66 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && app.state !== 'idle') requestWakeLock();
 });
 
+/* ---------------- forced updates ---------------- */
+
+function wireServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  window.addEventListener('load', async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' });
+      reg.update();
+      // re-check for a new version every time the app is brought to the foreground
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') reg.update().catch(() => {});
+      });
+    } catch (_) {}
+  });
+  // when a NEW service worker replaces the old one, reload to pick up fresh
+  // assets — but never on first install, mid-take, or mid-playback
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloaded || !hadController) return;
+    if (app.state !== 'idle') return;
+    reloaded = true;
+    location.reload();
+  });
+}
+
 /* ---------------- boot ---------------- */
 
-buildTracks();
-wireTransport();
-wireSettings();
-wireKeyboard();
-updateTransportUI();
-updateTimeUI();
-requestAnimationFrame(tick);
-restore();
+async function boot() {
+  buildTracks();
+  buildAppearancePickers();
+  wireTransport();
+  wireSheets();
+  wireKeyboard();
+  updateTransportUI();
+  updateTimeUI();
+  requestAnimationFrame(tick);
+  wireServiceWorker();
 
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  try {
+    const prefs = await idb.get('prefs');
+    if (prefs) Object.assign(app.prefs, prefs);
+  } catch (_) {}
+  applyAppearance();
+
+  try {
+    app.projectsMeta = (await idb.get('projects')) || [];
+    if (!app.projectsMeta.length) await migrateLegacy();
+
+    if (app.projectsMeta.length) {
+      const last = app.projectsMeta.find(m => m.id === app.prefs.lastProject)
+        || [...app.projectsMeta].sort((a, b) => b.updated - a.updated)[0];
+      await openProject(last.id, { quiet: true });
+      if (songLength()) toast('Project restored');
+    } else {
+      await createProject({ quiet: true });
+    }
+  } catch (_) {
+    if (!app.projectId) createProject({ quiet: true });
+  }
 }
+
+boot();

@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<title>Four Track</title>
-<meta name="description" content="A minimalist four-track recorder for demos. Record, overdub, mix and export — right in your browser.">
+<title>Crumple</title>
+<meta name="description" content="Crumple — a minimalist four-track recorder for demos. Record, overdub, mix and export — right in your browser.">
 <meta name="theme-color" content="#f2f1ee">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Four Track">
+<meta name="apple-mobile-web-app-title" content="Crumple">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -19,8 +19,14 @@
 
 <header class="app-header">
   <div class="header-row">
-    <input id="projectName" class="project-name" value="New Demo" maxlength="40"
-           aria-label="Project name" autocomplete="off" spellcheck="false">
+    <div class="title-wrap">
+      <div class="wordmark">Crumple</div>
+      <input id="projectName" class="project-name" value="New Demo" maxlength="40"
+             aria-label="Project name" autocomplete="off" spellcheck="false">
+    </div>
+    <button id="projectsBtn" class="icon-btn" aria-label="Projects" title="Projects">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 5.5A2.5 2.5 0 0 1 6.5 3h3.2c.7 0 1.4.3 1.9.8l1 1.2h4.9A2.5 2.5 0 0 1 20 7.5v9A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-11zm2.5-.5a.5.5 0 0 0-.5.5V8h12v-.5a.5.5 0 0 0-.5-.5h-5.8l-1.6-1.8a.5.5 0 0 0-.4-.2H6.5z"/></svg>
+    </button>
     <button id="settingsBtn" class="icon-btn" aria-label="Settings" title="Settings">
       <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 8.5A3.5 3.5 0 1 0 12 15.5 3.5 3.5 0 0 0 12 8.5zm9.2 4.9.1-1.4-.1-1.4-2.1-.5a7.4 7.4 0 0 0-.7-1.6l1.2-1.9-2-2-1.9 1.2a7.4 7.4 0 0 0-1.6-.7L13.4 3h-2.8l-.5 2.1a7.4 7.4 0 0 0-1.6.7L6.6 4.6l-2 2 1.2 1.9a7.4 7.4 0 0 0-.7 1.6l-2.1.5-.1 1.4.1 1.4 2.1.5c.2.6.4 1.1.7 1.6l-1.2 1.9 2 2 1.9-1.2c.5.3 1 .5 1.6.7l.5 2.1h2.8l.5-2.1c.6-.2 1.1-.4 1.6-.7l1.9 1.2 2-2-1.2-1.9c.3-.5.5-1 .7-1.6l2.1-.5z"/></svg>
     </button>
@@ -32,6 +38,8 @@
 </header>
 
 <main id="tracks" class="tracks" aria-label="Tracks"></main>
+
+<p class="colophon">Crumple v0.1 · © Avery</p>
 
 <footer class="transport">
   <button id="rtzBtn" class="t-btn" aria-label="Return to start" title="Return to start (Enter)">
@@ -57,10 +65,34 @@
   </button>
 </footer>
 
+<div id="projectsSheet" class="sheet" hidden>
+  <div class="sheet-card" role="dialog" aria-label="Projects" aria-modal="true">
+    <div class="sheet-handle"></div>
+    <h2>Projects</h2>
+    <div id="projectList" class="proj-list"></div>
+    <div class="set-actions">
+      <button id="newProjectBtn" class="primary-btn">New project</button>
+    </div>
+  </div>
+</div>
+
 <div id="settingsSheet" class="sheet" hidden>
   <div class="sheet-card" role="dialog" aria-label="Settings" aria-modal="true">
     <div class="sheet-handle"></div>
     <h2>Settings</h2>
+
+    <h3>Appearance</h3>
+    <div id="themeGrid" class="theme-grid" role="radiogroup" aria-label="Theme"></div>
+    <div class="set-row">
+      <span>Accent</span>
+      <div id="accentRow" class="accent-row" role="radiogroup" aria-label="Accent color"></div>
+    </div>
+    <label class="set-row">
+      <span>Paper texture</span>
+      <input type="range" id="setTexture" min="0" max="200" value="100">
+    </label>
+
+    <h3>Recording</h3>
     <label class="set-row">
       <span>Count-in <small>one bar of clicks before recording</small></span>
       <input type="checkbox" id="setCountIn" class="switch" checked>
@@ -77,11 +109,13 @@
       <span>Recording alignment <small id="latencyLabel">auto + 0 ms</small></span>
       <input type="range" id="setLatency" min="-150" max="150" value="0" step="5">
     </label>
+
     <div class="set-actions">
-      <button id="clearProjectBtn" class="danger-btn">Erase project</button>
+      <button id="deleteProjectBtn" class="danger-btn">Delete project</button>
       <button id="closeSettingsBtn" class="primary-btn">Done</button>
     </div>
     <p class="set-hint">Shortcuts — Space play · 1-4 record track · M metronome · L loop · E export</p>
+    <p class="set-hint">Crumple v0.1 · © Avery</p>
   </div>
 </div>
 

@@ -1,7 +1,7 @@
 {
-  "name": "Four Track",
-  "short_name": "Four Track",
-  "description": "A minimalist four-track recorder for demos. Record, overdub, mix and export.",
+  "name": "Crumple",
+  "short_name": "Crumple",
+  "description": "Crumple — a minimalist four-track recorder for demos. Record, overdub, mix and export.",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
