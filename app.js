@@ -3,7 +3,7 @@
 /* Crumple — a minimalist 4-track recorder.
    Web Audio + MediaRecorder, no dependencies. */
 
-const APP_VERSION = '0.3';
+const APP_VERSION = '0.4';
 const NUM_TRACKS = 4;
 const BEATS_PER_BAR = 4;
 
