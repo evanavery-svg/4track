@@ -22,7 +22,7 @@
     <div class="title-wrap">
       <div class="brand-row">
         <div class="wordmark"><span class="wm-4">4</span>track</div>
-        <span class="version-tag">v0.5 · © Avery</span>
+        <span class="version-tag">v0.6 · © Avery</span>
       </div>
       <input id="projectName" class="project-name" value="New Demo" maxlength="40"
              aria-label="Project name" autocomplete="off" spellcheck="false">
@@ -37,6 +37,7 @@
   <div class="time-row">
     <div id="timeDisplay" class="time-display">0:00<span class="time-frac">.0</span></div>
     <div id="lengthDisplay" class="length-display">&nbsp;</div>
+    <button id="lofiBadge" class="lofi-badge" hidden title="Lo-Fi is on — tap to turn off">LO-FI</button>
   </div>
 </header>
 
@@ -74,6 +75,17 @@
       <input id="tsName" class="ts-name" maxlength="24" aria-label="Track name" autocomplete="off" spellcheck="false">
       <span id="tsDur" class="track-dur"></span>
     </div>
+
+    <div class="ts-wave-tools">
+      <span class="ts-wave-label">Waveform</span>
+      <div class="ts-zoom">
+        <button id="tsZoomOut" class="zoom-btn" aria-label="Zoom out">−</button>
+        <span id="tsZoomLabel">1×</span>
+        <button id="tsZoomIn" class="zoom-btn" aria-label="Zoom in">+</button>
+      </div>
+    </div>
+    <div id="tsWaveScroll" class="ts-wave-scroll"><canvas id="tsWave"></canvas></div>
+
     <label class="set-row">
       <span>Volume</span>
       <input type="range" id="tsVol" min="0" max="100" value="90" aria-label="Volume">
@@ -83,9 +95,23 @@
       <input type="range" id="tsPan" min="-100" max="100" value="0" aria-label="Pan">
     </label>
     <label class="set-row">
+      <span>Tone <small id="tsToneLabel">flat</small></span>
+      <input type="range" id="tsTone" min="-100" max="100" value="0" aria-label="Tone">
+    </label>
+    <label class="set-row">
+      <span>Solo</span>
+      <input type="checkbox" id="tsSolo" class="switch">
+    </label>
+    <label class="set-row">
       <span>Mute</span>
       <input type="checkbox" id="tsMute" class="switch">
     </label>
+    <label class="set-row">
+      <span>Input monitor <small>hear yourself · use headphones</small></span>
+      <input type="checkbox" id="tsMonitor" class="switch">
+    </label>
+    <div class="ts-level"><div id="tsLevelFill" class="ts-level-fill"></div></div>
+
     <div class="set-actions">
       <button id="tsUndo" class="ghost-btn" disabled>Undo take</button>
       <button id="tsClear" class="danger-btn" disabled>Clear track</button>
@@ -121,6 +147,16 @@
     <label class="set-row">
       <span>Paper texture</span>
       <input type="range" id="setTexture" min="0" max="200" value="100">
+    </label>
+
+    <h3>Effects</h3>
+    <label class="set-row">
+      <span>Lo-Fi <small>tape crush over the whole mix &amp; export</small></span>
+      <input type="checkbox" id="setLoFi" class="switch">
+    </label>
+    <label class="set-row">
+      <span>Lo-Fi intensity</span>
+      <input type="range" id="setLoFiAmt" min="0" max="100" value="80">
     </label>
 
     <h3>Recording</h3>

@@ -3,7 +3,7 @@
 /* Crumple — a minimalist 4-track recorder.
    Web Audio + MediaRecorder, no dependencies. */
 
-const APP_VERSION = '0.5';
+const APP_VERSION = '0.6';
 const NUM_TRACKS = 4;
 const BEATS_PER_BAR = 4;
 
@@ -149,12 +149,21 @@ const app = {
   nextBeat: 0,
   schedTimer: null,
 
+  lofi: false,
+  lofiAmt: 0.8,
+  busInput: null,
+  lofiChain: null,
+  micSourceNode: null,
+  monitorGain: null,
+  monitorRaf: null,
+
   projectId: null,
   projectsMeta: [],     // [{ id, name, updated, length, bpm }]
   prefs: { theme: 'paper', accent: 'blue', texture: 1, lastProject: null },
 
   tracks: [],           // { buffer, prevBuffer, name, volume, pan, muted, gainNode, panNode, ui:{} }
   sheetTrack: -1,
+  sheetZoom: 1,
   wakeLock: null,
   taps: [],
 };
@@ -167,22 +176,160 @@ function ensureCtx() {
     app.ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     app.master = app.ctx.createGain();
     app.master.connect(app.ctx.destination);
+    app.busInput = app.ctx.createGain();     // all tracks feed here; lofi sits between bus and master
     for (const t of app.tracks) {
       t.gainNode = app.ctx.createGain();
       t.panNode = app.ctx.createStereoPanner ? app.ctx.createStereoPanner() : null;
-      if (t.panNode) { t.gainNode.connect(t.panNode); t.panNode.connect(app.master); }
-      else t.gainNode.connect(app.master);
+      t.toneLow = app.ctx.createBiquadFilter(); t.toneLow.type = 'lowshelf'; t.toneLow.frequency.value = 320;
+      t.toneHigh = app.ctx.createBiquadFilter(); t.toneHigh.type = 'highshelf'; t.toneHigh.frequency.value = 3200;
+      // gain -> [pan] -> toneLow -> toneHigh -> busInput
+      t.gainNode.connect(t.panNode || t.toneLow);
+      if (t.panNode) t.panNode.connect(t.toneLow);
+      t.toneLow.connect(t.toneHigh);
+      t.toneHigh.connect(app.busInput);
       applyTrackGain(t);
+      applyTone(t);
     }
+    rebuildLoFi();
   }
   if (app.ctx.state === 'suspended') app.ctx.resume();
   return app.ctx;
 }
 
+const anySolo = () => app.tracks.some(t => t.solo);
+
 function applyTrackGain(t) {
   if (!t.gainNode) return;
-  t.gainNode.gain.setTargetAtTime(t.muted ? 0 : t.volume, app.ctx.currentTime, 0.015);
+  const silent = t.muted || (anySolo() && !t.solo);
+  t.gainNode.gain.setTargetAtTime(silent ? 0 : t.volume, app.ctx.currentTime, 0.015);
   if (t.panNode) t.panNode.pan.setTargetAtTime(t.pan, app.ctx.currentTime, 0.015);
+}
+
+function applyAllGains() { if (app.ctx) for (const t of app.tracks) applyTrackGain(t); }
+
+function applyTone(t) {
+  if (!t.toneLow) return;
+  const v = clamp(t.tone || 0, -1, 1);       // -1 dark … +1 bright (tilt EQ)
+  const g = 13 * v;
+  t.toneLow.gain.setTargetAtTime(-g, app.ctx.currentTime, 0.02);
+  t.toneHigh.gain.setTargetAtTime(g, app.ctx.currentTime, 0.02);
+}
+
+/* ---------------- Lo-Fi effect (tape/cassette crush) ---------------- */
+
+function makeSaturationCurve(amt) {
+  const n = 1024, curve = new Float32Array(n);
+  const k = 1 + amt * 45;
+  for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; curve[i] = Math.tanh(k * x) / Math.tanh(k); }
+  return curve;
+}
+function makeCrushCurve(bits) {
+  const n = 2048, curve = new Float32Array(n), levels = Math.pow(2, bits);
+  for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; curve[i] = Math.round(x * levels) / levels; }
+  return curve;
+}
+function makeNoiseBuffer(ctx, seconds = 2.2) {
+  const len = Math.floor(ctx.sampleRate * seconds);
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  return buf;
+}
+
+// Context-agnostic: builds the same crushed chain for live playback and export.
+function buildLoFiChain(ctx, amt) {
+  amt = clamp(amt, 0, 1);
+  const input = ctx.createGain();
+  const output = ctx.createGain();
+
+  const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 120 + amt * 260;
+  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 6200 - amt * 3300; lp.Q.value = 0.9;
+  const sat = ctx.createWaveShaper(); sat.curve = makeSaturationCurve(amt); sat.oversample = '2x';
+  const crush = ctx.createWaveShaper(); crush.curve = makeCrushCurve(Math.round(9 - amt * 4)); // 9..5 bits
+  const wow = ctx.createDelay(0.05); wow.delayTime.value = 0.006;
+
+  // wow (slow) + flutter (fast) pitch wobble via modulated delay time
+  const lfo = ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 0.7 + amt * 1.3;
+  const lfoG = ctx.createGain(); lfoG.gain.value = 0.0008 + amt * 0.0038;
+  lfo.connect(lfoG); lfoG.connect(wow.delayTime); lfo.start();
+  const flut = ctx.createOscillator(); flut.type = 'sine'; flut.frequency.value = 6 + amt * 5;
+  const flutG = ctx.createGain(); flutG.gain.value = 0.00015 + amt * 0.0009;
+  flut.connect(flutG); flutG.connect(wow.delayTime); flut.start();
+
+  input.connect(hp); hp.connect(lp); lp.connect(sat); sat.connect(crush); crush.connect(wow); wow.connect(output);
+
+  // tape hiss
+  const noise = ctx.createBufferSource(); noise.buffer = makeNoiseBuffer(ctx); noise.loop = true;
+  const noiseHp = ctx.createBiquadFilter(); noiseHp.type = 'highpass'; noiseHp.frequency.value = 900;
+  const noiseG = ctx.createGain(); noiseG.gain.value = 0.003 + amt * 0.02;
+  noise.connect(noiseHp); noiseHp.connect(noiseG); noiseG.connect(output);
+  noise.start();
+
+  output.gain.value = 1 + amt * 0.25;         // makeup for filtering losses
+  return { input, output, _sources: [lfo, flut, noise] };
+}
+
+function rebuildLoFi() {
+  if (!app.ctx || !app.busInput) return;
+  try { app.busInput.disconnect(); } catch (_) {}
+  if (app.lofiChain) {
+    try { app.lofiChain._sources.forEach(s => s.stop && s.stop()); } catch (_) {}
+    try { app.lofiChain.output.disconnect(); } catch (_) {}
+    app.lofiChain = null;
+  }
+  if (app.lofi) {
+    app.lofiChain = buildLoFiChain(app.ctx, app.lofiAmt);
+    app.busInput.connect(app.lofiChain.input);
+    app.lofiChain.output.connect(app.master);
+  } else {
+    app.busInput.connect(app.master);
+  }
+}
+
+/* ---------------- input monitor / level check ---------------- */
+
+async function setMonitor(on) {
+  if (!on) { stopMonitor(); return; }
+  ensureCtx();
+  try { await getMic(); }
+  catch (_) { toast('Microphone access is needed'); const sw = $('#tsMonitor'); if (sw) sw.checked = false; return; }
+  if (!app.monitorGain) {
+    app.monitorGain = app.ctx.createGain();
+    app.monitorGain.gain.value = 1;
+    app.micSourceNode.connect(app.monitorGain);
+    app.monitorGain.connect(app.ctx.destination);  // dry, pre-effects monitoring
+  }
+  toast('Monitoring input — use headphones');
+  startMonitorMeter();
+}
+
+function stopMonitor() {
+  if (app.monitorGain) {
+    try { app.micSourceNode && app.micSourceNode.disconnect(app.monitorGain); } catch (_) {}
+    try { app.monitorGain.disconnect(); } catch (_) {}
+    app.monitorGain = null;
+  }
+  stopMonitorMeter();
+  const sw = $('#tsMonitor'); if (sw) sw.checked = false;
+}
+
+function startMonitorMeter() {
+  stopMonitorMeter();
+  const bar = $('#tsLevelFill');
+  const loop = () => {
+    if (!app.micAnalyser) return;
+    const data = new Float32Array(app.micAnalyser.fftSize);
+    app.micAnalyser.getFloatTimeDomainData(data);
+    let peak = 0;
+    for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > peak) peak = a; }
+    if (bar) bar.style.transform = `scaleX(${clamp(peak * 1.15, 0, 1)})`;
+    app.monitorRaf = requestAnimationFrame(loop);
+  };
+  loop();
+}
+function stopMonitorMeter() {
+  if (app.monitorRaf) { cancelAnimationFrame(app.monitorRaf); app.monitorRaf = null; }
+  const bar = $('#tsLevelFill'); if (bar) bar.style.transform = 'scaleX(0)';
 }
 
 /* ---------------- transport ---------------- */
@@ -291,10 +438,10 @@ async function getMic() {
   app.micStream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
   });
-  const src = app.ctx.createMediaStreamSource(app.micStream);
+  app.micSourceNode = app.ctx.createMediaStreamSource(app.micStream);
   app.micAnalyser = app.ctx.createAnalyser();
   app.micAnalyser.fftSize = 1024;
-  src.connect(app.micAnalyser); // analysis only — no monitoring, no feedback
+  app.micSourceNode.connect(app.micAnalyser); // analysis; monitoring routed separately
   return app.micStream;
 }
 
@@ -312,6 +459,7 @@ async function toggleRecord(i) {
     return;                     // stopped another track; press again to arm
   }
   if (app.state === 'playing') stopAll();
+  stopMonitor();            // never monitor into a live take (feedback)
   ensureCtx();
 
   if (!navigator.mediaDevices || !window.MediaRecorder) {
@@ -527,17 +675,29 @@ async function exportMix() {
   ensureCtx();
   toast('Rendering mix…');
   const sr = app.ctx.sampleRate;
+  const solo = anySolo();
   const off = new OfflineAudioContext(2, Math.ceil(total * sr), sr);
+
+  // master bus mirrors live routing: tracks -> bus -> [lofi] -> destination
+  let busOut = off.destination;
+  if (app.lofi) {
+    const lofi = buildLoFiChain(off, app.lofiAmt);
+    lofi.output.connect(off.destination);
+    busOut = lofi.input;
+  }
+
   for (const t of app.tracks) {
-    if (!t.buffer || t.muted) continue;
+    if (!t.buffer || t.muted || (solo && !t.solo)) continue;
     const src = off.createBufferSource();
     src.buffer = t.buffer;
     const g = off.createGain(); g.gain.value = t.volume;
-    src.connect(g);
+    const low = off.createBiquadFilter(); low.type = 'lowshelf'; low.frequency.value = 320; low.gain.value = -13 * (t.tone || 0);
+    const high = off.createBiquadFilter(); high.type = 'highshelf'; high.frequency.value = 3200; high.gain.value = 13 * (t.tone || 0);
+    src.connect(g); g.connect(low); low.connect(high);
     if (off.createStereoPanner) {
       const p = off.createStereoPanner(); p.pan.value = t.pan;
-      g.connect(p); p.connect(off.destination);
-    } else g.connect(off.destination);
+      high.connect(p); p.connect(busOut);
+    } else high.connect(busOut);
     src.start(0);
   }
   const rendered = await off.startRendering();
@@ -637,7 +797,8 @@ function currentSettings() {
     projectName: $('#projectName').value,
     bpm: app.bpm, loop: app.loop, met: app.met, metRec: app.metRec,
     metVol: app.metVol, countIn: app.countIn, latencyMs: app.latencyMs,
-    tracks: app.tracks.map(t => ({ name: t.name, volume: t.volume, pan: t.pan, muted: t.muted })),
+    lofi: app.lofi, lofiAmt: app.lofiAmt,
+    tracks: app.tracks.map(t => ({ name: t.name, volume: t.volume, pan: t.pan, muted: t.muted, solo: t.solo, tone: t.tone })),
   };
 }
 
@@ -682,9 +843,14 @@ function applySettings(s) {
   app.metVol = (s && s.metVol) ?? 0.6;
   app.countIn = !s || s.countIn !== false;
   app.latencyMs = (s && s.latencyMs) || 0;
+  app.lofi = !!(s && s.lofi);
+  app.lofiAmt = (s && s.lofiAmt) ?? 0.8;
   ((s && s.tracks) || []).forEach((m, i) => {
     if (!app.tracks[i]) return;
-    Object.assign(app.tracks[i], { name: m.name, volume: m.volume, pan: m.pan, muted: m.muted });
+    Object.assign(app.tracks[i], {
+      name: m.name, volume: m.volume, pan: m.pan, muted: m.muted,
+      solo: !!m.solo, tone: m.tone || 0,
+    });
   });
 }
 
@@ -708,10 +874,11 @@ async function openProject(id, { quiet = false } = {}) {
     const t = app.tracks[i];
     t.prevBuffer = undefined;
     t.buffer = await decodeStoredAudio(await idb.get(projKey(id, `audio${i}`)));
-    if (t.gainNode) applyTrackGain(t);
-    if (!s || !s.tracks || !s.tracks[i]) Object.assign(t, { name: `Track ${i + 1}`, volume: 0.9, pan: 0, muted: false });
+    if (!s || !s.tracks || !s.tracks[i]) Object.assign(t, { name: `Track ${i + 1}`, volume: 0.9, pan: 0, muted: false, solo: false, tone: 0 });
+    if (t.gainNode) { applyTrackGain(t); applyTone(t); }
     refreshTrack(i);
   }
+  if (app.ctx) rebuildLoFi();
   app.prefs.lastProject = id;
   savePrefs();
   syncSettingsUI();
@@ -732,10 +899,11 @@ async function createProject({ quiet = false } = {}) {
     const t = app.tracks[i];
     t.buffer = null;
     t.prevBuffer = undefined;
-    Object.assign(t, { name: `Track ${i + 1}`, volume: 0.9, pan: 0, muted: false });
-    if (t.gainNode) applyTrackGain(t);
+    Object.assign(t, { name: `Track ${i + 1}`, volume: 0.9, pan: 0, muted: false, solo: false, tone: 0 });
+    if (t.gainNode) { applyTrackGain(t); applyTone(t); }
     refreshTrack(i);
   }
+  if (app.ctx) rebuildLoFi();
   app.prefs.lastProject = app.projectId;
   savePrefs();
   await saveSettings();
@@ -838,8 +1006,8 @@ function buildTracks() {
   for (let i = 0; i < NUM_TRACKS; i++) {
     const t = {
       buffer: null, prevBuffer: undefined,
-      name: `Track ${i + 1}`, volume: 0.9, pan: 0, muted: false,
-      gainNode: null, panNode: null, ui: {},
+      name: `Track ${i + 1}`, volume: 0.9, pan: 0, muted: false, solo: false, tone: 0,
+      gainNode: null, panNode: null, toneLow: null, toneHigh: null, ui: {},
     };
     app.tracks.push(t);
 
@@ -851,7 +1019,9 @@ function buildTracks() {
         <div class="track-line">
           <span class="track-num">${i + 1}</span>
           <span class="track-title">Track ${i + 1}</span>
+          <span class="badge-solo" hidden>solo</span>
           <span class="badge-mute" hidden>muted</span>
+          <span class="badge-tone" hidden></span>
           <span class="track-dur"></span>
           <svg class="chev" viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </div>
@@ -875,7 +1045,9 @@ function buildTracks() {
       meter: $('.meter', el),
       recBtn: $('.rec-btn', el),
       title: $('.track-title', el),
+      badgeSolo: $('.badge-solo', el),
       badgeMute: $('.badge-mute', el),
+      badgeTone: $('.badge-tone', el),
       dur: $('.track-dur', el),
       recTime: $('.rec-time', el),
     };
@@ -920,7 +1092,11 @@ function buildTracks() {
 function refreshTrack(i) {
   const t = app.tracks[i];
   t.ui.title.textContent = t.name || `Track ${i + 1}`;
+  t.ui.badgeSolo.hidden = !t.solo;
   t.ui.badgeMute.hidden = !t.muted;
+  const tv = Math.round((t.tone || 0) * 100);
+  t.ui.badgeTone.hidden = tv === 0;
+  t.ui.badgeTone.textContent = tv > 0 ? `+${tv} bright` : `${tv} dark`;
   t.ui.dur.textContent = t.buffer ? fmtTime(t.buffer.duration) : '';
   t.ui.meter.style.transform = 'scaleX(0)';
   if (app.sheetTrack === i && !$('#trackSheet').hidden) syncTrackSheet(i);
@@ -952,14 +1128,23 @@ function updateTimeUI() {
 /* ---------------- sheets ---------------- */
 
 function syncSettingsUI() {
+  $('#setLoFi').checked = app.lofi;
+  $('#setLoFiAmt').value = Math.round(app.lofiAmt * 100);
   $('#setCountIn').checked = app.countIn;
   $('#setMetRec').checked = app.metRec;
   $('#setMetVol').value = Math.round(app.metVol * 100);
   $('#setLatency').value = app.latencyMs;
   $('#latencyLabel').textContent = `auto ${app.latencyMs >= 0 ? '+' : '−'} ${Math.abs(app.latencyMs)} ms`;
+  updateLoFiBadge();
+}
+
+function updateLoFiBadge() {
+  const b = $('#lofiBadge');
+  if (b) b.hidden = !app.lofi;
 }
 
 function closeSheets() {
+  stopMonitor();
   $('#settingsSheet').hidden = true;
   $('#projectsSheet').hidden = true;
   $('#trackSheet').hidden = true;
@@ -972,6 +1157,51 @@ function panLabel(pan) {
   if (p === 0) return 'center';
   return `${Math.abs(p)}% ${p < 0 ? 'left' : 'right'}`;
 }
+function toneLabel(v) {
+  const p = Math.round(v * 100);
+  if (p === 0) return 'flat';
+  return p > 0 ? `+${p} bright` : `${p} dark`;
+}
+
+function drawSheetWave(i) {
+  const t = app.tracks[i];
+  const canvas = $('#tsWave');
+  const scroll = $('#tsWaveScroll');
+  const dpr = window.devicePixelRatio || 1;
+  const baseW = scroll.clientWidth || 300;
+  const h = 88;
+  const cssW = Math.max(baseW, Math.round(baseW * app.sheetZoom));
+  canvas.style.width = cssW + 'px';
+  canvas.style.height = h + 'px';
+  canvas.width = cssW * dpr;
+  canvas.height = h * dpr;
+  const g = canvas.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, cssW, h);
+  const mid = h / 2;
+  if (!t.buffer) {
+    g.fillStyle = waveInk; g.globalAlpha = 0.4;
+    g.font = '12px -apple-system, system-ui, sans-serif'; g.textAlign = 'center';
+    g.fillText('no audio yet', cssW / 2, mid + 4); g.globalAlpha = 1;
+    return;
+  }
+  const barW = 2, gap = 1;
+  const buckets = Math.max(1, Math.floor(cssW / (barW + gap)));
+  const peaks = computePeaks(t.buffer, buckets);
+  g.fillStyle = waveInk;
+  for (let b = 0; b < buckets; b++) {
+    const amp = Math.max(1, peaks[b] * (h * 0.86)) / 2;
+    const x = b * (barW + gap);
+    if (g.roundRect) { g.beginPath(); g.roundRect(x, mid - amp, barW, amp * 2, 1); g.fill(); }
+    else g.fillRect(x, mid - amp, barW, amp * 2);
+  }
+}
+
+function setSheetZoom(z) {
+  app.sheetZoom = clamp(z, 1, 16);
+  $('#tsZoomLabel').textContent = `${Math.round(app.sheetZoom * 10) / 10}×`;
+  if (app.sheetTrack >= 0) drawSheetWave(app.sheetTrack);
+}
 
 function syncTrackSheet(i) {
   const t = app.tracks[i];
@@ -981,17 +1211,24 @@ function syncTrackSheet(i) {
   $('#tsVol').value = Math.round(t.volume * 100);
   $('#tsPan').value = Math.round(t.pan * 100);
   $('#tsPanLabel').textContent = panLabel(t.pan);
+  $('#tsTone').value = Math.round((t.tone || 0) * 100);
+  $('#tsToneLabel').textContent = toneLabel(t.tone || 0);
+  $('#tsSolo').checked = t.solo;
   $('#tsMute').checked = t.muted;
+  $('#tsMonitor').checked = !!app.monitorGain;
   $('#tsUndo').disabled = t.prevBuffer === undefined;
   $('#tsClear').disabled = !t.buffer;
 }
 
 function openTrackSheet(i) {
   app.sheetTrack = i;
+  app.sheetZoom = 1;
   syncTrackSheet(i);
+  $('#tsZoomLabel').textContent = '1×';
   $('#settingsSheet').hidden = true;
   $('#projectsSheet').hidden = true;
   $('#trackSheet').hidden = false;
+  requestAnimationFrame(() => drawSheetWave(i));
 }
 
 function wireTrackSheet() {
@@ -1015,23 +1252,42 @@ function wireTrackSheet() {
     if (app.ctx) applyTrackGain(t);
     saveSettingsSoon();
   });
+  $('#tsTone').addEventListener('input', () => {
+    const t = cur(); if (!t) return;
+    t.tone = $('#tsTone').value / 100;
+    $('#tsToneLabel').textContent = toneLabel(t.tone);
+    if (app.ctx) applyTone(t);
+    refreshTrack(app.sheetTrack); saveSettingsSoon();
+  });
+  $('#tsSolo').addEventListener('change', () => {
+    const t = cur(); if (!t) return;
+    t.solo = $('#tsSolo').checked;
+    applyAllGains();
+    for (let i = 0; i < NUM_TRACKS; i++) refreshTrack(i);
+    saveSettingsSoon();
+  });
   $('#tsMute').addEventListener('change', () => {
     const t = cur(); if (!t) return;
     t.muted = $('#tsMute').checked;
-    if (app.ctx) applyTrackGain(t);
+    applyAllGains();
     refreshTrack(app.sheetTrack); saveSettingsSoon();
   });
+  $('#tsMonitor').addEventListener('change', (e) => setMonitor(e.target.checked));
+  $('#tsZoomIn').addEventListener('click', () => setSheetZoom(app.sheetZoom * 1.7));
+  $('#tsZoomOut').addEventListener('click', () => setSheetZoom(app.sheetZoom / 1.7));
   $('#tsUndo').addEventListener('click', () => {
     const t = cur(); if (!t || t.prevBuffer === undefined) return;
     [t.buffer, t.prevBuffer] = [t.prevBuffer, t.buffer];
-    refreshTrack(app.sheetTrack); redrawAllWaves(); saveTrackAudio(app.sheetTrack); saveSettingsSoon();
+    refreshTrack(app.sheetTrack); redrawAllWaves(); drawSheetWave(app.sheetTrack);
+    saveTrackAudio(app.sheetTrack); saveSettingsSoon();
     toast(t.buffer ? 'Previous take restored' : 'Take removed — Undo again to bring it back');
   });
   $('#tsClear').addEventListener('click', () => {
     const t = cur(); if (!t || !t.buffer) return;
     t.prevBuffer = t.buffer;
     t.buffer = null;
-    refreshTrack(app.sheetTrack); redrawAllWaves(); saveTrackAudio(app.sheetTrack); saveSettingsSoon();
+    refreshTrack(app.sheetTrack); redrawAllWaves(); drawSheetWave(app.sheetTrack);
+    saveTrackAudio(app.sheetTrack); saveSettingsSoon();
     toast('Track cleared — Undo take to restore');
   });
   $('#tsDone').addEventListener('click', closeSheets);
@@ -1057,6 +1313,17 @@ function wireSheets() {
   $('#newProjectBtn').addEventListener('click', async () => {
     closeSheets();
     await createProject();
+  });
+  $('#setLoFi').addEventListener('change', (e) => {
+    app.lofi = e.target.checked;
+    if (app.lofi) ensureCtx();
+    rebuildLoFi(); updateLoFiBadge(); saveSettingsSoon();
+    toast(app.lofi ? 'Lo-Fi on' : 'Lo-Fi off');
+  });
+  $('#setLoFiAmt').addEventListener('input', (e) => {
+    app.lofiAmt = e.target.value / 100;
+    if (app.lofi) rebuildLoFi();
+    saveSettingsSoon();
   });
   $('#setCountIn').addEventListener('change', (e) => { app.countIn = e.target.checked; saveSettingsSoon(); });
   $('#setMetRec').addEventListener('change', (e) => { app.metRec = e.target.checked; saveSettingsSoon(); });
@@ -1122,6 +1389,11 @@ function wireTransport() {
     click(app.ctx.currentTime + 0.01, false);
   });
   $('#exportBtn').addEventListener('click', exportMix);
+  $('#lofiBadge').addEventListener('click', () => {
+    app.lofi = false;
+    rebuildLoFi(); updateLoFiBadge(); syncSettingsUI(); saveSettingsSoon();
+    toast('Lo-Fi off');
+  });
   $('#projectName').addEventListener('input', saveSettingsSoon);
 }
 

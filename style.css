@@ -217,6 +217,21 @@ body::before {
   font-variant-numeric: tabular-nums;
 }
 
+.lofi-badge {
+  margin-left: auto;
+  border: none;
+  cursor: pointer;
+  font: 700 10px/1 inherit;
+  letter-spacing: 0.12em;
+  color: var(--red);
+  background: var(--red-soft);
+  padding: 5px 9px;
+  border-radius: 8px;
+  align-self: center;
+}
+.lofi-badge[hidden] { display: none; }
+.lofi-badge:active { transform: scale(0.94); }
+
 /* ---------- tracks ---------- */
 
 .tracks {
@@ -294,15 +309,17 @@ body::before {
   text-overflow: ellipsis;
 }
 
-.badge-mute {
+.badge-mute, .badge-solo, .badge-tone {
   flex: none;
   font-size: 9px; font-weight: 700;
   letter-spacing: 0.05em; text-transform: uppercase;
-  color: var(--red);
-  background: var(--red-soft);
   padding: 2px 6px;
   border-radius: 6px;
+  white-space: nowrap;
 }
+.badge-mute { color: var(--red); background: var(--red-soft); }
+.badge-solo { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.badge-tone { color: var(--ink-2); background: var(--paper); }
 
 .track-dur {
   font-size: 11px;
@@ -743,6 +760,70 @@ input[type="range"]::-moz-range-thumb {
 }
 .ts-name:focus { background: var(--paper); }
 .ts-head .track-dur { font-size: 12px; }
+
+/* sheet: zoomable waveform */
+
+.ts-wave-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 2px 0 6px;
+}
+.ts-wave-label {
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.ts-zoom {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--paper);
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px var(--line);
+  padding: 2px;
+}
+.zoom-btn {
+  width: 28px; height: 26px;
+  border: none; background: transparent;
+  color: var(--ink-2); font-size: 17px; line-height: 1;
+  border-radius: 10px; cursor: pointer;
+}
+.zoom-btn:active { background: var(--line); }
+#tsZoomLabel {
+  min-width: 34px; text-align: center;
+  font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ink-2);
+}
+
+.ts-wave-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-radius: 10px;
+  background: var(--wave-bg);
+  box-shadow: inset 0 0 0 1px var(--line);
+  -webkit-overflow-scrolling: touch;
+}
+#tsWave { display: block; height: 88px; }
+
+/* sheet: input level meter */
+
+.ts-level {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line);
+  overflow: hidden;
+  margin: 2px 0 4px;
+}
+.ts-level-fill {
+  height: 100%;
+  transform-origin: left;
+  transform: scaleX(0);
+  background: linear-gradient(90deg, #34c759 70%, #ffcc00 88%, var(--red));
+  transition: transform 0.05s linear;
+}
 
 .set-hint {
   margin-top: 14px;
