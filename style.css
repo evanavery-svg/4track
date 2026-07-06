@@ -232,6 +232,52 @@ body::before {
 .lofi-badge[hidden] { display: none; }
 .lofi-badge:active { transform: scale(0.94); }
 
+/* loop A/B bar */
+
+.loop-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 0 2px;
+  flex-wrap: wrap;
+}
+.loop-bar[hidden] { display: none; }
+.loop-bar-label {
+  font-size: 10.5px; font-weight: 700;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--accent);
+}
+.loop-chip {
+  border: none;
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--ink);
+  font: 600 12px inherit;
+  padding: 5px 10px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.loop-chip:active { transform: scale(0.95); }
+.loop-chip:disabled { opacity: 0.4; }
+.loop-clear { color: var(--red); }
+.loop-val {
+  font-size: 12px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  min-width: 30px;
+}
+.loop-dash { color: var(--ink-3); }
+
+/* loop region overlay on waveforms */
+
+.loop-region {
+  position: absolute; top: 0; bottom: 0;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  box-shadow: inset 1px 0 0 var(--accent), inset -1px 0 0 var(--accent);
+  pointer-events: none;
+}
+.loop-region[hidden] { display: none; }
+
 /* ---------- tracks ---------- */
 
 .tracks {
@@ -731,6 +777,54 @@ input[type="range"]::-moz-range-thumb {
 .danger-btn { background: var(--red-soft); color: var(--red); }
 .primary-btn { background: var(--ink); color: var(--paper); }
 .ghost-btn { background: var(--paper); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
+
+/* stepper (beats per bar) */
+.stepper {
+  display: flex;
+  align-items: center;
+  background: var(--paper);
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px var(--line);
+  overflow: hidden;
+}
+.stepper-btn {
+  width: 32px; height: 32px;
+  border: none; background: transparent;
+  color: var(--ink-2); font-size: 18px; cursor: pointer;
+}
+.stepper-btn:active { background: var(--line); }
+.stepper-val {
+  min-width: 30px; text-align: center;
+  font-size: 14px; font-weight: 600;
+  font-variant-numeric: tabular-nums; color: var(--ink);
+}
+
+/* segmented control (subdivision) */
+.seg {
+  display: flex;
+  background: var(--paper);
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px var(--line);
+  padding: 2px;
+  gap: 2px;
+}
+.seg-btn {
+  border: none; background: transparent;
+  color: var(--ink-2);
+  font: 600 12px inherit;
+  padding: 6px 9px;
+  border-radius: 10px;
+  cursor: pointer;
+  min-width: 38px;
+}
+.seg-btn[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+
+.export-name {
+  font-size: 14px;
+  color: var(--ink-2);
+  padding: 2px 0 6px;
+  font-variant-numeric: tabular-nums;
+}
 .danger-btn:active, .primary-btn:active, .ghost-btn:active { transform: scale(0.97); }
 .danger-btn:disabled, .ghost-btn:disabled { opacity: 0.4; }
 

@@ -3,7 +3,7 @@
 /* Crumple — a minimalist 4-track recorder.
    Web Audio + MediaRecorder, no dependencies. */
 
-const APP_VERSION = '0.6';
+const APP_VERSION = '0.7';
 const NUM_TRACKS = 4;
 const BEATS_PER_BAR = 4;
 
@@ -141,13 +141,20 @@ const app = {
 
   bpm: 120,
   loop: false,
+  loopA: null,          // loop region start (s), null = song start
+  loopB: null,          // loop region end (s), null = song end
   met: false,
   metRec: true,
   metVol: 0.6,
   countIn: true,
+  beatsPerBar: 4,       // time signature (top number)
+  subdiv: 1,            // metronome subdivisions per beat (1,2,3,4)
   latencyMs: 0,
-  nextBeat: 0,
+  nextTick: 0,
   schedTimer: null,
+
+  exportBlob: null,
+  exportName: 'demo',
 
   lofi: false,
   lofiAmt: 0.8,
@@ -356,7 +363,11 @@ function play() {
   if (app.state !== 'idle') return;
   ensureCtx();
   if (songLength() === 0) { toast('Nothing to play yet — record a track'); return; }
-  if (app.pos >= songLength() - 0.25) app.pos = 0;
+  if (app.loop && hasLoopRegion() && (app.pos < loopStart() - 0.001 || app.pos >= loopEnd() - 0.01)) {
+    app.pos = loopStart();
+  } else if (app.pos >= songLength() - 0.25) {
+    app.pos = 0;
+  }
   const t0 = app.ctx.currentTime + 0.08;
   startSources(app.pos, t0);
   app.playStartCtx = t0;
@@ -387,23 +398,79 @@ function seek(pos) {
     startSources(app.pos, t0);
     app.playStartCtx = t0;
     app.playStartPos = app.pos;
-    app.nextBeat = Math.ceil(app.pos / secPerBeat() - 1e-6);
+    app.nextTick = Math.ceil(app.pos / secPerTick() - 1e-6);
   }
   drawPlayheads();
   updateTimeUI();
 }
 
+/* ---------------- loop region (A/B) ---------------- */
+
+const hasLoopRegion = () => app.loopA != null || app.loopB != null;
+const loopStart = () => clamp(app.loopA != null ? app.loopA : 0, 0, songLength());
+const loopEnd = () => clamp(app.loopB != null ? app.loopB : songLength(), 0, songLength());
+
+function updateLoopBar() {
+  const bar = $('#loopBar');
+  if (!bar) return;
+  bar.hidden = !app.loop;
+  $('#loopAVal').textContent = app.loopA != null ? fmtTime(app.loopA, true) : 'start';
+  $('#loopBVal').textContent = app.loopB != null ? fmtTime(app.loopB, true) : 'end';
+  $('#loopClear').disabled = !hasLoopRegion();
+}
+
+function updateLoopRegionUI() {
+  const total = songLength();
+  const show = app.loop && hasLoopRegion() && total > 0;
+  const a = show ? loopStart() / total : 0;
+  const b = show ? loopEnd() / total : 0;
+  for (const t of app.tracks) {
+    const el = t.ui.loopRegion;
+    if (!el) continue;
+    el.hidden = !show;
+    if (show) { el.style.left = `${a * 100}%`; el.style.width = `${(b - a) * 100}%`; }
+  }
+}
+
+function setLoopA() {
+  if (!songLength()) return;
+  app.loopA = clamp(app.pos, 0, songLength());
+  if (app.loopB != null && app.loopA >= app.loopB) app.loopB = null;
+  updateLoopBar(); updateLoopRegionUI(); saveSettingsSoon();
+}
+function setLoopB() {
+  if (!songLength()) return;
+  const b = clamp(app.pos, 0, songLength());
+  if (b <= loopStart() + 0.05) { toast('Move the playhead past A first'); return; }
+  app.loopB = b;
+  updateLoopBar(); updateLoopRegionUI(); saveSettingsSoon();
+}
+function clearLoopRegion() {
+  app.loopA = app.loopB = null;
+  updateLoopBar(); updateLoopRegionUI(); saveSettingsSoon();
+}
+
 /* ---------------- metronome ---------------- */
 
 const secPerBeat = () => 60 / app.bpm;
+const secPerTick = () => secPerBeat() / app.subdiv;
 
-function click(atTime, accent) {
+// level: 2 = bar downbeat, 1 = beat, 0 = subdivision
+function tickLevel(tickIdx) {
+  const ticksPerBar = app.subdiv * app.beatsPerBar;
+  const inBar = ((tickIdx % ticksPerBar) + ticksPerBar) % ticksPerBar;
+  if (inBar === 0) return 2;
+  return (((tickIdx % app.subdiv) + app.subdiv) % app.subdiv === 0) ? 1 : 0;
+}
+
+function click(atTime, level = 1) {
   const ctx = app.ctx;
   const osc = ctx.createOscillator();
   const g = ctx.createGain();
-  osc.frequency.value = accent ? 1568 : 1046;
+  osc.frequency.value = level >= 2 ? 1568 : level === 1 ? 1046 : 784;
+  const vol = app.metVol * (level >= 2 ? 0.5 : level === 1 ? 0.32 : 0.15);
   g.gain.setValueAtTime(0.0001, atTime);
-  g.gain.exponentialRampToValueAtTime(app.metVol * (accent ? 0.5 : 0.32) + 0.0001, atTime + 0.002);
+  g.gain.exponentialRampToValueAtTime(vol + 0.0001, atTime + 0.002);
   g.gain.exponentialRampToValueAtTime(0.0001, atTime + 0.055);
   osc.connect(g); g.connect(ctx.destination);
   osc.start(atTime); osc.stop(atTime + 0.07);
@@ -411,18 +478,18 @@ function click(atTime, accent) {
 
 function startBeatScheduler() {
   stopBeatScheduler();
-  app.nextBeat = Math.ceil(app.playStartPos / secPerBeat() - 1e-6);
+  app.nextTick = Math.ceil(app.playStartPos / secPerTick() - 1e-6);
   app.schedTimer = setInterval(() => {
     const wantClicks = app.state === 'playing' ? app.met
       : app.state === 'recording' ? (app.metRec || app.met) : false;
-    if (!wantClicks) { app.nextBeat = Math.ceil(currentPos() / secPerBeat()); return; }
+    if (!wantClicks) { app.nextTick = Math.ceil(currentPos() / secPerTick()); return; }
     const horizon = app.ctx.currentTime + 0.14;
     while (true) {
-      const beatPos = app.nextBeat * secPerBeat();
-      const beatCtx = app.playStartCtx + (beatPos - app.playStartPos);
-      if (beatCtx > horizon) break;
-      if (beatCtx >= app.ctx.currentTime - 0.01) click(beatCtx, app.nextBeat % BEATS_PER_BAR === 0);
-      app.nextBeat++;
+      const tickPos = app.nextTick * secPerTick();
+      const tickCtx = app.playStartCtx + (tickPos - app.playStartPos);
+      if (tickCtx > horizon) break;
+      if (tickCtx >= app.ctx.currentTime - 0.01) click(tickCtx, tickLevel(app.nextTick));
+      app.nextTick++;
     }
   }, 30);
 }
@@ -481,10 +548,10 @@ async function toggleRecord(i) {
   await started;
   app.recStartCtx = app.ctx.currentTime;
 
-  const countInDur = app.countIn ? BEATS_PER_BAR * secPerBeat() : 0;
+  const countInDur = app.countIn ? app.beatsPerBar * secPerBeat() : 0;
   const t0 = app.ctx.currentTime + 0.18 + countInDur;
   if (app.countIn) {
-    for (let b = 0; b < BEATS_PER_BAR; b++) click(t0 - countInDur + b * secPerBeat(), b === 0);
+    for (let b = 0; b < app.beatsPerBar; b++) click(t0 - countInDur + b * secPerBeat(), b === 0 ? 2 : 1);
   }
 
   app.recStartPos = app.pos;
@@ -615,6 +682,7 @@ function drawWave(i) {
 
 function redrawAllWaves() {
   for (let i = 0; i < NUM_TRACKS; i++) drawWave(i);
+  updateLoopRegionUI();
   updateTimeUI();
 }
 
@@ -641,9 +709,12 @@ function tick() {
   if (app.state !== 'idle') {
     app.pos = currentPos();
     const total = songLength();
-    if (app.state === 'playing' && total && app.pos >= total) {
-      if (app.loop) { seek(0); }
-      else { stopSources(); stopBeatScheduler(); app.state = 'idle'; app.pos = total; releaseWakeLock(); updateTransportUI(); }
+    if (app.state === 'playing' && total) {
+      const end = app.loop ? Math.min(loopEnd(), total) : total;
+      if (app.pos >= end - 0.001) {
+        if (app.loop) { seek(loopStart()); }
+        else { stopSources(); stopBeatScheduler(); app.state = 'idle'; app.pos = total; releaseWakeLock(); updateTransportUI(); }
+      }
     }
     updateTimeUI();
     drawPlayheads();
@@ -713,12 +784,116 @@ async function exportMix() {
 
   const wav = encodeWav(chans, sr, false);
   const name = ($('#projectName').value.trim() || 'demo').replace(/[^\w\- ]+/g, '').trim() || 'demo';
-  const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
+  app.exportBlob = new Blob([wav], { type: 'audio/wav' });
+  app.exportName = name;
+  openExportSheet(`${name}.wav`);
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = `${name}.wav`;
+  a.href = url; a.download = filename;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
-  toast(`Exported “${name}.wav”`);
+}
+
+async function shareFile(blob, filename, title) {
+  const file = new File([blob], filename, { type: blob.type });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title }); return true; }
+    catch (e) { if (e && e.name === 'AbortError') return true; }   // user cancelled
+  }
+  return false;
+}
+
+/* result sheet: choose Share (native sheet) or Save (download) */
+function openExportSheet(filename) {
+  $('#exportFilename').textContent = filename;
+  const file = app.exportBlob && new File([app.exportBlob], filename, { type: 'audio/wav' });
+  const canShare = !!(navigator.canShare && file && navigator.canShare({ files: [file] }));
+  $('#expShare').hidden = !canShare;
+  closeSheets();
+  $('#exportSheet').hidden = false;
+}
+
+/* ---------------- project backup / import ---------------- */
+
+function abToBase64(ab) {
+  const bytes = new Uint8Array(ab);
+  let bin = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  return btoa(bin);
+}
+function base64ToAb(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+async function backupProject() {
+  if (!app.projectId) return;
+  await saveSettings();
+  const data = { format: '4track', v: 1, exported: Date.now(), settings: currentSettings(), audio: [] };
+  for (let i = 0; i < NUM_TRACKS; i++) {
+    const t = app.tracks[i];
+    data.audio[i] = t.buffer ? abToBase64(bufferToWav(t.buffer, false)) : null;   // 16-bit for portable size
+  }
+  const name = (data.settings.projectName || 'project').replace(/[^\w\- ]+/g, '').trim() || 'project';
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+  const shared = await shareFile(blob, `${name}.4track.json`, name);
+  if (!shared) downloadBlob(blob, `${name}.4track.json`);
+  toast('Project backed up');
+}
+
+async function importProjectFile(file) {
+  let data;
+  try { data = JSON.parse(await file.text()); }
+  catch (_) { toast('Could not read that file'); return; }
+  if (!data || data.format !== '4track') { toast('Not a 4track backup'); return; }
+
+  const id = newProjectId();
+  const s = data.settings || {};
+  await idb.set(projKey(id, 'settings'), s);
+  for (let i = 0; i < NUM_TRACKS; i++) {
+    const b64 = data.audio && data.audio[i];
+    if (b64) await idb.set(projKey(id, `audio${i}`), { sr: 0, wav: base64ToAb(b64) });
+  }
+  app.projectsMeta.push({
+    id, name: s.projectName || 'Imported', updated: Date.now(),
+    length: 0, bpm: s.bpm || 120,
+  });
+  await idb.set('projects', app.projectsMeta);
+  closeSheets();
+  await openProject(id);
+  toast(`Imported “${$('#projectName').value}”`);
+}
+
+/* ---------------- media session (lock screen / headphone remote) ---------------- */
+
+function setupMediaSession() {
+  if (!('mediaSession' in navigator)) return;
+  const set = (action, fn) => { try { navigator.mediaSession.setActionHandler(action, fn); } catch (_) {} };
+  set('play', () => { if (app.state === 'idle') play(); });
+  set('pause', () => stopAll());
+  set('stop', () => stopAll());
+  set('previoustrack', () => seek(0));
+  set('seekbackward', () => seek(Math.max(0, app.pos - 5)));
+  set('seekforward', () => seek(Math.min(songLength(), app.pos + 5)));
+}
+
+function updateMediaSession() {
+  if (!('mediaSession' in navigator)) return;
+  try {
+    navigator.mediaSession.playbackState = app.state === 'idle' ? 'paused' : 'playing';
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: ($('#projectName') && $('#projectName').value) || 'Untitled',
+      artist: '4track',
+      album: 'Demo',
+      artwork: [{ src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' }],
+    });
+  } catch (_) {}
 }
 
 /* ---------------- appearance ---------------- */
@@ -797,6 +972,8 @@ function currentSettings() {
     projectName: $('#projectName').value,
     bpm: app.bpm, loop: app.loop, met: app.met, metRec: app.metRec,
     metVol: app.metVol, countIn: app.countIn, latencyMs: app.latencyMs,
+    loopA: app.loopA, loopB: app.loopB,
+    beatsPerBar: app.beatsPerBar, subdiv: app.subdiv,
     lofi: app.lofi, lofiAmt: app.lofiAmt,
     tracks: app.tracks.map(t => ({ name: t.name, volume: t.volume, pan: t.pan, muted: t.muted, solo: t.solo, tone: t.tone })),
   };
@@ -843,6 +1020,10 @@ function applySettings(s) {
   app.metVol = (s && s.metVol) ?? 0.6;
   app.countIn = !s || s.countIn !== false;
   app.latencyMs = (s && s.latencyMs) || 0;
+  app.loopA = (s && s.loopA != null) ? s.loopA : null;
+  app.loopB = (s && s.loopB != null) ? s.loopB : null;
+  app.beatsPerBar = clamp((s && s.beatsPerBar) || 4, 2, 12);
+  app.subdiv = clamp((s && s.subdiv) || 1, 1, 4);
   app.lofi = !!(s && s.lofi);
   app.lofiAmt = (s && s.lofiAmt) ?? 0.8;
   ((s && s.tracks) || []).forEach((m, i) => {
@@ -1027,6 +1208,7 @@ function buildTracks() {
         </div>
         <div class="wave-wrap">
           <canvas></canvas>
+          <div class="loop-region" hidden></div>
           <div class="wave-hint">tap ● to record</div>
           <div class="rec-live"><span>● recording <b class="rec-time"></b></span></div>
           <div class="playhead" style="display:none"></div>
@@ -1040,6 +1222,7 @@ function buildTracks() {
       body: $('.track-body', el),
       canvas: $('canvas', el),
       waveWrap: $('.wave-wrap', el),
+      loopRegion: $('.loop-region', el),
       hint: $('.wave-hint', el),
       playhead: $('.playhead', el),
       meter: $('.meter', el),
@@ -1115,6 +1298,9 @@ function updateTransportUI() {
     app.tracks[i].ui.recBtn.setAttribute('aria-pressed', String(rec));
     if (!rec) app.tracks[i].ui.meter.style.transform = 'scaleX(0)';
   }
+  updateLoopBar();
+  updateLoopRegionUI();
+  updateMediaSession();
 }
 
 function updateTimeUI() {
@@ -1135,6 +1321,11 @@ function syncSettingsUI() {
   $('#setMetVol').value = Math.round(app.metVol * 100);
   $('#setLatency').value = app.latencyMs;
   $('#latencyLabel').textContent = `auto ${app.latencyMs >= 0 ? '+' : '−'} ${Math.abs(app.latencyMs)} ms`;
+  $('#beatsVal').textContent = String(app.beatsPerBar);
+  $('#timeSigLabel').textContent = `${app.beatsPerBar} / ${app.subdiv >= 2 ? 8 : 4}`;
+  for (const b of document.querySelectorAll('#subdivRow .seg-btn')) {
+    b.setAttribute('aria-pressed', String(+b.dataset.sub === app.subdiv));
+  }
   updateLoFiBadge();
 }
 
@@ -1148,6 +1339,7 @@ function closeSheets() {
   $('#settingsSheet').hidden = true;
   $('#projectsSheet').hidden = true;
   $('#trackSheet').hidden = true;
+  $('#exportSheet').hidden = true;
 }
 
 /* ---- per-track options sheet ---- */
@@ -1338,10 +1530,41 @@ function wireSheets() {
     document.documentElement.style.setProperty('--tex-user', String(app.prefs.texture));
     savePrefs();
   });
+  const setBeats = (v) => { app.beatsPerBar = clamp(v, 2, 12); syncSettingsUI(); saveSettingsSoon(); };
+  $('#beatsDown').addEventListener('click', () => setBeats(app.beatsPerBar - 1));
+  $('#beatsUp').addEventListener('click', () => setBeats(app.beatsPerBar + 1));
+  for (const b of document.querySelectorAll('#subdivRow .seg-btn')) {
+    b.addEventListener('click', () => {
+      app.subdiv = clamp(+b.dataset.sub, 1, 4);
+      syncSettingsUI(); saveSettingsSoon();
+      if (app.met || app.state !== 'idle') { ensureCtx(); click(app.ctx.currentTime + 0.01, 1); }
+    });
+  }
+  $('#backupBtn').addEventListener('click', backupProject);
+  $('#importBtn').addEventListener('click', () => $('#importFile').click());
+  $('#importFile').addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (f) importProjectFile(f);
+  });
   $('#deleteProjectBtn').addEventListener('click', () => {
     closeSheets();
     deleteProject(app.projectId);
   });
+
+  // export result sheet
+  $('#expSave').addEventListener('click', () => {
+    if (app.exportBlob) downloadBlob(app.exportBlob, `${app.exportName}.wav`);
+    closeSheets();
+  });
+  $('#expShare').addEventListener('click', async () => {
+    if (!app.exportBlob) return;
+    const ok = await shareFile(app.exportBlob, `${app.exportName}.wav`, app.exportName);
+    if (!ok) downloadBlob(app.exportBlob, `${app.exportName}.wav`);
+    closeSheets();
+  });
+  $('#expDone').addEventListener('click', closeSheets);
+  $('#exportSheet').addEventListener('click', (e) => { if (e.target === $('#exportSheet')) closeSheets(); });
 }
 
 /* ---------------- transport wiring ---------------- */
@@ -1369,9 +1592,12 @@ function wireTransport() {
   $('#playBtn').addEventListener('click', () => { app.state === 'idle' ? play() : stopAll(); });
   $('#rtzBtn').addEventListener('click', () => seek(0));
   $('#loopBtn').addEventListener('click', () => { app.loop = !app.loop; updateTransportUI(); saveSettingsSoon(); });
+  $('#loopSetA').addEventListener('click', setLoopA);
+  $('#loopSetB').addEventListener('click', setLoopB);
+  $('#loopClear').addEventListener('click', clearLoopRegion);
   $('#metBtn').addEventListener('click', () => {
     app.met = !app.met;
-    if (app.met) { ensureCtx(); click(app.ctx.currentTime + 0.01, true); }
+    if (app.met) { ensureCtx(); click(app.ctx.currentTime + 0.01, 2); }
     updateTransportUI(); saveSettingsSoon();
   });
   holdRepeat($('#bpmDown'), () => setBpm(app.bpm - 1));
@@ -1386,9 +1612,10 @@ function wireTransport() {
       const iv = (app.taps[app.taps.length - 1] - app.taps[0]) / (app.taps.length - 1);
       setBpm(60000 / iv);
     }
-    click(app.ctx.currentTime + 0.01, false);
+    click(app.ctx.currentTime + 0.01, 1);
   });
   $('#exportBtn').addEventListener('click', exportMix);
+  $('#projectName').addEventListener('input', updateMediaSession);
   $('#lofiBadge').addEventListener('click', () => {
     app.lofi = false;
     rebuildLoFi(); updateLoFiBadge(); syncSettingsUI(); saveSettingsSoon();
@@ -1509,6 +1736,7 @@ async function boot() {
   wireSheets();
   wireTrackSheet();
   wireKeyboard();
+  setupMediaSession();
   updateTransportUI();
   updateTimeUI();
   requestAnimationFrame(tick);

@@ -22,7 +22,7 @@
     <div class="title-wrap">
       <div class="brand-row">
         <div class="wordmark"><span class="wm-4">4</span>track</div>
-        <span class="version-tag">v0.6 · © Avery</span>
+        <span class="version-tag">v0.7 · © Avery</span>
       </div>
       <input id="projectName" class="project-name" value="New Demo" maxlength="40"
              aria-label="Project name" autocomplete="off" spellcheck="false">
@@ -38,6 +38,15 @@
     <div id="timeDisplay" class="time-display">0:00<span class="time-frac">.0</span></div>
     <div id="lengthDisplay" class="length-display">&nbsp;</div>
     <button id="lofiBadge" class="lofi-badge" hidden title="Lo-Fi is on — tap to turn off">LO-FI</button>
+  </div>
+  <div id="loopBar" class="loop-bar" hidden>
+    <span class="loop-bar-label">Loop</span>
+    <button id="loopSetA" class="loop-chip">Set A</button>
+    <span id="loopAVal" class="loop-val">start</span>
+    <span class="loop-dash">–</span>
+    <button id="loopSetB" class="loop-chip">Set B</button>
+    <span id="loopBVal" class="loop-val">end</span>
+    <button id="loopClear" class="loop-chip loop-clear" disabled>Clear</button>
   </div>
 </header>
 
@@ -66,6 +75,21 @@
     <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M11 3h2v10.2l3.6-3.6L18 11l-6 6-6-6 1.4-1.4L11 13.2zM4 19h16v2H4z"/></svg>
   </button>
 </footer>
+
+<div id="exportSheet" class="sheet" hidden>
+  <div class="sheet-card" role="dialog" aria-label="Export mix" aria-modal="true">
+    <div class="sheet-handle"></div>
+    <h2>Mix ready</h2>
+    <p class="export-name"><span id="exportFilename">demo.wav</span></p>
+    <div class="set-actions">
+      <button id="expShare" class="primary-btn" hidden>Share</button>
+      <button id="expSave" class="ghost-btn">Save to device</button>
+    </div>
+    <div class="set-actions">
+      <button id="expDone" class="ghost-btn">Done</button>
+    </div>
+  </div>
+</div>
 
 <div id="trackSheet" class="sheet" hidden>
   <div class="sheet-card" role="dialog" aria-label="Track options" aria-modal="true">
@@ -172,17 +196,41 @@
       <span>Metronome volume</span>
       <input type="range" id="setMetVol" min="0" max="100" value="60">
     </label>
+    <div class="set-row">
+      <span>Beats per bar <small id="timeSigLabel">4 / 4</small></span>
+      <div class="stepper">
+        <button id="beatsDown" class="stepper-btn" aria-label="Fewer beats">−</button>
+        <span id="beatsVal" class="stepper-val">4</span>
+        <button id="beatsUp" class="stepper-btn" aria-label="More beats">+</button>
+      </div>
+    </div>
+    <div class="set-row">
+      <span>Subdivision</span>
+      <div id="subdivRow" class="seg" role="radiogroup" aria-label="Subdivision">
+        <button data-sub="1" class="seg-btn">1/4</button>
+        <button data-sub="2" class="seg-btn">1/8</button>
+        <button data-sub="3" class="seg-btn">⅛T</button>
+        <button data-sub="4" class="seg-btn">1/16</button>
+      </div>
+    </div>
     <label class="set-row">
       <span>Recording alignment <small id="latencyLabel">auto + 0 ms</small></span>
       <input type="range" id="setLatency" min="-150" max="150" value="0" step="5">
     </label>
+
+    <h3>Project</h3>
+    <div class="set-actions">
+      <button id="backupBtn" class="ghost-btn">Back up</button>
+      <button id="importBtn" class="ghost-btn">Import…</button>
+    </div>
+    <input type="file" id="importFile" accept=".json,application/json" hidden>
 
     <div class="set-actions">
       <button id="deleteProjectBtn" class="danger-btn">Delete project</button>
       <button id="closeSettingsBtn" class="primary-btn">Done</button>
     </div>
     <p class="set-hint">Shortcuts — Space play · 1-4 record track · M metronome · L loop · E export</p>
-    <p class="set-hint">4track v0.2 · © Avery</p>
+    <p class="set-hint">4track v0.7 · © Avery</p>
   </div>
 </div>
 
