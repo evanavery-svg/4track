@@ -21,8 +21,8 @@
   <div class="header-row">
     <div class="title-wrap">
       <div class="brand-row">
-        <div class="wordmark">4track</div>
-        <span class="version-tag">v0.2 · © Avery</span>
+        <div class="wordmark"><span class="wm-4">4</span>track</div>
+        <span class="version-tag">v0.3 · © Avery</span>
       </div>
       <input id="projectName" class="project-name" value="New Demo" maxlength="40"
              aria-label="Project name" autocomplete="off" spellcheck="false">
@@ -65,6 +65,36 @@
     <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M11 3h2v10.2l3.6-3.6L18 11l-6 6-6-6 1.4-1.4L11 13.2zM4 19h16v2H4z"/></svg>
   </button>
 </footer>
+
+<div id="trackSheet" class="sheet" hidden>
+  <div class="sheet-card" role="dialog" aria-label="Track options" aria-modal="true">
+    <div class="sheet-handle"></div>
+    <div class="ts-head">
+      <span id="tsNum" class="track-num">1</span>
+      <input id="tsName" class="ts-name" maxlength="24" aria-label="Track name" autocomplete="off" spellcheck="false">
+      <span id="tsDur" class="track-dur"></span>
+    </div>
+    <label class="set-row">
+      <span>Volume</span>
+      <input type="range" id="tsVol" min="0" max="100" value="90" aria-label="Volume">
+    </label>
+    <label class="set-row">
+      <span>Pan <small id="tsPanLabel">center</small></span>
+      <input type="range" id="tsPan" min="-100" max="100" value="0" aria-label="Pan">
+    </label>
+    <label class="set-row">
+      <span>Mute</span>
+      <input type="checkbox" id="tsMute" class="switch">
+    </label>
+    <div class="set-actions">
+      <button id="tsUndo" class="ghost-btn" disabled>Undo take</button>
+      <button id="tsClear" class="danger-btn" disabled>Clear track</button>
+    </div>
+    <div class="set-actions">
+      <button id="tsDone" class="primary-btn">Done</button>
+    </div>
+  </div>
+</div>
 
 <div id="projectsSheet" class="sheet" hidden>
   <div class="sheet-card" role="dialog" aria-label="Projects" aria-modal="true">

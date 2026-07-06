@@ -3,7 +3,7 @@
 /* Crumple — a minimalist 4-track recorder.
    Web Audio + MediaRecorder, no dependencies. */
 
-const APP_VERSION = '0.2';
+const APP_VERSION = '0.3';
 const NUM_TRACKS = 4;
 const BEATS_PER_BAR = 4;
 
@@ -154,6 +154,7 @@ const app = {
   prefs: { theme: 'paper', accent: 'blue', texture: 1, lastProject: null },
 
   tracks: [],           // { buffer, prevBuffer, name, volume, pan, muted, gainNode, panNode, ui:{} }
+  sheetTrack: -1,
   wakeLock: null,
   taps: [],
 };
@@ -845,98 +846,70 @@ function buildTracks() {
     const el = document.createElement('section');
     el.className = 'track';
     el.innerHTML = `
-      <div class="track-top">
-        <span class="track-num">${i + 1}</span>
-        <input class="track-name" value="Track ${i + 1}" maxlength="24" aria-label="Track ${i + 1} name" autocomplete="off" spellcheck="false">
-        <span class="track-dur"></span>
-      </div>
-      <div class="wave-wrap" role="slider" aria-label="Track ${i + 1} timeline">
-        <canvas></canvas>
-        <div class="wave-hint">tap ● to record</div>
-        <div class="rec-live"><span>● recording <b class="rec-time"></b></span></div>
-        <div class="playhead" style="display:none"></div>
-        <div class="meter"></div>
-      </div>
-      <div class="track-ctls">
-        <button class="rec-btn" aria-label="Record track ${i + 1}" aria-pressed="false" title="Record (${i + 1})"></button>
-        <button class="pill-btn mute-btn" aria-pressed="false" title="Mute">M</button>
-        <div class="sliders">
-          <div class="slider-row">
-            <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4z"/></svg>
-            <input type="range" class="vol" min="0" max="100" value="90" aria-label="Volume">
-          </div>
-          <div class="slider-row">
-            <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M4 11h7V4h2v7h7v2h-7v7h-2v-7H4z" transform="rotate(90 12 12)"/></svg>
-            <input type="range" class="pan" min="-100" max="100" value="0" aria-label="Pan">
-          </div>
+      <button class="rec-btn" aria-label="Record track ${i + 1}" aria-pressed="false" title="Record (${i + 1})"></button>
+      <div class="track-body" role="button" tabindex="0" aria-label="Track ${i + 1} options">
+        <div class="track-line">
+          <span class="track-num">${i + 1}</span>
+          <span class="track-title">Track ${i + 1}</span>
+          <span class="badge-mute" hidden>muted</span>
+          <span class="track-dur"></span>
+          <svg class="chev" viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </div>
-        <button class="pill-btn undo-btn" title="Undo take" disabled>↩︎</button>
-        <button class="pill-btn clear-btn" title="Clear track" disabled>✕</button>
+        <div class="wave-wrap">
+          <canvas></canvas>
+          <div class="wave-hint">tap ● to record</div>
+          <div class="rec-live"><span>● recording <b class="rec-time"></b></span></div>
+          <div class="playhead" style="display:none"></div>
+          <div class="meter"></div>
+        </div>
       </div>`;
     host.appendChild(el);
 
     t.ui = {
       el,
+      body: $('.track-body', el),
       canvas: $('canvas', el),
       waveWrap: $('.wave-wrap', el),
       hint: $('.wave-hint', el),
       playhead: $('.playhead', el),
       meter: $('.meter', el),
       recBtn: $('.rec-btn', el),
-      muteBtn: $('.mute-btn', el),
-      undoBtn: $('.undo-btn', el),
-      clearBtn: $('.clear-btn', el),
-      nameInput: $('.track-name', el),
+      title: $('.track-title', el),
+      badgeMute: $('.badge-mute', el),
       dur: $('.track-dur', el),
-      vol: $('.vol', el),
-      pan: $('.pan', el),
       recTime: $('.rec-time', el),
     };
 
     t.ui.recBtn.addEventListener('click', () => toggleRecord(i));
-    t.ui.muteBtn.addEventListener('click', () => {
-      t.muted = !t.muted;
-      if (app.ctx) applyTrackGain(t);
-      refreshTrack(i); saveSettingsSoon();
-    });
-    t.ui.vol.addEventListener('input', () => {
-      t.volume = t.ui.vol.value / 100;
-      if (app.ctx) applyTrackGain(t);
-      saveSettingsSoon();
-    });
-    t.ui.pan.addEventListener('input', () => {
-      t.pan = t.ui.pan.value / 100;
-      if (app.ctx) applyTrackGain(t);
-      saveSettingsSoon();
-    });
-    t.ui.undoBtn.addEventListener('click', () => {
-      if (t.prevBuffer === undefined) return;
-      [t.buffer, t.prevBuffer] = [t.prevBuffer, t.buffer];
-      refreshTrack(i); redrawAllWaves(); saveTrackAudio(i); saveSettingsSoon();
-      toast(t.buffer ? 'Previous take restored' : 'Take removed — tap ↩︎ to bring it back');
-    });
-    t.ui.clearBtn.addEventListener('click', () => {
-      if (!t.buffer) return;
-      t.prevBuffer = t.buffer;
-      t.buffer = null;
-      refreshTrack(i); redrawAllWaves(); saveTrackAudio(i); saveSettingsSoon();
-      toast('Track cleared — tap ↩︎ to undo');
-    });
-    t.ui.nameInput.addEventListener('input', () => { t.name = t.ui.nameInput.value; saveSettingsSoon(); });
 
-    // click / drag to seek
-    const onSeek = (e) => {
+    // One gesture, two meanings: a quick tap opens the track's options;
+    // a horizontal drag scrubs the timeline (only if the track has audio).
+    const seekAt = (clientX) => {
       const r = t.ui.waveWrap.getBoundingClientRect();
-      const x = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
-      seek((x / r.width) * songLength());
+      seek(((clientX - r.left) / r.width) * songLength());
     };
-    t.ui.waveWrap.addEventListener('pointerdown', (e) => {
-      if (app.state === 'recording' || !songLength()) return;
-      onSeek(e);
-      const move = (ev) => onSeek(ev);
-      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+    t.ui.body.addEventListener('pointerdown', (e) => {
+      if (e.button != null && e.button !== 0) return;
+      const startX = e.clientX, startY = e.clientY;
+      let scrubbing = false;
+      const move = (ev) => {
+        if (!scrubbing) {
+          if (Math.abs(ev.clientX - startX) < 8 || Math.abs(ev.clientY - startY) > 14) return;
+          if (app.state === 'recording' || !songLength()) return;
+          scrubbing = true;
+        }
+        seekAt(ev.clientX);
+      };
+      const up = (ev) => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        if (!scrubbing && app.state !== 'recording') openTrackSheet(i);
+      };
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
+    });
+    t.ui.body.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); openTrackSheet(i); }
     });
   }
 
@@ -946,14 +919,11 @@ function buildTracks() {
 
 function refreshTrack(i) {
   const t = app.tracks[i];
-  t.ui.nameInput.value = t.name;
-  t.ui.vol.value = Math.round(t.volume * 100);
-  t.ui.pan.value = Math.round(t.pan * 100);
-  t.ui.muteBtn.setAttribute('aria-pressed', String(t.muted));
-  t.ui.undoBtn.disabled = t.prevBuffer === undefined;
-  t.ui.clearBtn.disabled = !t.buffer;
+  t.ui.title.textContent = t.name || `Track ${i + 1}`;
+  t.ui.badgeMute.hidden = !t.muted;
   t.ui.dur.textContent = t.buffer ? fmtTime(t.buffer.duration) : '';
   t.ui.meter.style.transform = 'scaleX(0)';
+  if (app.sheetTrack === i && !$('#trackSheet').hidden) syncTrackSheet(i);
 }
 
 function updateTransportUI() {
@@ -992,6 +962,80 @@ function syncSettingsUI() {
 function closeSheets() {
   $('#settingsSheet').hidden = true;
   $('#projectsSheet').hidden = true;
+  $('#trackSheet').hidden = true;
+}
+
+/* ---- per-track options sheet ---- */
+
+function panLabel(pan) {
+  const p = Math.round(pan * 100);
+  if (p === 0) return 'center';
+  return `${Math.abs(p)}% ${p < 0 ? 'left' : 'right'}`;
+}
+
+function syncTrackSheet(i) {
+  const t = app.tracks[i];
+  $('#tsNum').textContent = String(i + 1);
+  if (document.activeElement !== $('#tsName')) $('#tsName').value = t.name;
+  $('#tsDur').textContent = t.buffer ? fmtTime(t.buffer.duration) : 'empty';
+  $('#tsVol').value = Math.round(t.volume * 100);
+  $('#tsPan').value = Math.round(t.pan * 100);
+  $('#tsPanLabel').textContent = panLabel(t.pan);
+  $('#tsMute').checked = t.muted;
+  $('#tsUndo').disabled = t.prevBuffer === undefined;
+  $('#tsClear').disabled = !t.buffer;
+}
+
+function openTrackSheet(i) {
+  app.sheetTrack = i;
+  syncTrackSheet(i);
+  $('#settingsSheet').hidden = true;
+  $('#projectsSheet').hidden = true;
+  $('#trackSheet').hidden = false;
+}
+
+function wireTrackSheet() {
+  const cur = () => app.tracks[app.sheetTrack];
+  $('#tsName').addEventListener('input', () => {
+    const t = cur(); if (!t) return;
+    t.name = $('#tsName').value;
+    t.ui.title.textContent = t.name || `Track ${app.sheetTrack + 1}`;
+    saveSettingsSoon();
+  });
+  $('#tsVol').addEventListener('input', () => {
+    const t = cur(); if (!t) return;
+    t.volume = $('#tsVol').value / 100;
+    if (app.ctx) applyTrackGain(t);
+    saveSettingsSoon();
+  });
+  $('#tsPan').addEventListener('input', () => {
+    const t = cur(); if (!t) return;
+    t.pan = $('#tsPan').value / 100;
+    $('#tsPanLabel').textContent = panLabel(t.pan);
+    if (app.ctx) applyTrackGain(t);
+    saveSettingsSoon();
+  });
+  $('#tsMute').addEventListener('change', () => {
+    const t = cur(); if (!t) return;
+    t.muted = $('#tsMute').checked;
+    if (app.ctx) applyTrackGain(t);
+    refreshTrack(app.sheetTrack); saveSettingsSoon();
+  });
+  $('#tsUndo').addEventListener('click', () => {
+    const t = cur(); if (!t || t.prevBuffer === undefined) return;
+    [t.buffer, t.prevBuffer] = [t.prevBuffer, t.buffer];
+    refreshTrack(app.sheetTrack); redrawAllWaves(); saveTrackAudio(app.sheetTrack); saveSettingsSoon();
+    toast(t.buffer ? 'Previous take restored' : 'Take removed — Undo again to bring it back');
+  });
+  $('#tsClear').addEventListener('click', () => {
+    const t = cur(); if (!t || !t.buffer) return;
+    t.prevBuffer = t.buffer;
+    t.buffer = null;
+    refreshTrack(app.sheetTrack); redrawAllWaves(); saveTrackAudio(app.sheetTrack); saveSettingsSoon();
+    toast('Track cleared — Undo take to restore');
+  });
+  $('#tsDone').addEventListener('click', closeSheets);
+  $('#trackSheet').addEventListener('click', (e) => { if (e.target === $('#trackSheet')) closeSheets(); });
 }
 
 function wireSheets() {
@@ -1191,6 +1235,7 @@ async function boot() {
   buildAppearancePickers();
   wireTransport();
   wireSheets();
+  wireTrackSheet();
   wireKeyboard();
   updateTransportUI();
   updateTimeUI();
