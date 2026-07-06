@@ -3,7 +3,7 @@
 /* Crumple — a minimalist 4-track recorder.
    Web Audio + MediaRecorder, no dependencies. */
 
-const APP_VERSION = '0.1';
+const APP_VERSION = '0.2';
 const NUM_TRACKS = 4;
 const BEATS_PER_BAR = 4;
 
@@ -1116,7 +1116,44 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && app.state !== 'idle') requestWakeLock();
 });
 
-/* ---------------- forced updates ---------------- */
+/* ---------------- forced updates ----------------
+   Two independent mechanisms, so a stale service worker on someone's
+   phone can't silently hide a new release forever:
+
+   1. Standard SW update flow — new sw.js is detected, installs, takes
+      over, and reloads the idle page once via 'controllerchange'.
+   2. A direct version.json check (bypassing the SW/HTTP cache entirely)
+      that nukes any service worker + cache and force-reloads whenever
+      the served version doesn't match what's running. This is the one
+      that actually breaks a wedged old worker, since it doesn't depend
+      on that worker's own update logic ever running. */
+
+async function checkForUpdate() {
+  try {
+    const res = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.version && data.version !== APP_VERSION) forceUpdate(data.version);
+  } catch (_) {}
+}
+
+async function forceUpdate(newVersion) {
+  if (app.state !== 'idle') return; // never interrupt a take or playback
+  const guardKey = `4track_forced_${newVersion}`;
+  if (sessionStorage.getItem(guardKey)) return; // already tried this version this session
+  sessionStorage.setItem(guardKey, '1');
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+  } catch (_) {}
+  location.reload();
+}
 
 function wireServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
@@ -1124,14 +1161,11 @@ function wireServiceWorker() {
     try {
       const reg = await navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' });
       reg.update();
-      // re-check for a new version every time the app is brought to the foreground
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') reg.update().catch(() => {});
       });
     } catch (_) {}
   });
-  // when a NEW service worker replaces the old one, reload to pick up fresh
-  // assets — but never on first install, mid-take, or mid-playback
   const hadController = !!navigator.serviceWorker.controller;
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
@@ -1140,6 +1174,14 @@ function wireServiceWorker() {
     reloaded = true;
     location.reload();
   });
+}
+
+function wireUpdateChecks() {
+  setTimeout(checkForUpdate, 1200);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') checkForUpdate();
+  });
+  window.addEventListener('focus', checkForUpdate);
 }
 
 /* ---------------- boot ---------------- */
@@ -1154,6 +1196,7 @@ async function boot() {
   updateTimeUI();
   requestAnimationFrame(tick);
   wireServiceWorker();
+  wireUpdateChecks();
 
   try {
     const prefs = await idb.get('prefs');
