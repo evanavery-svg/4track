@@ -143,23 +143,23 @@ body::before {
 .brand-row {
   display: flex;
   align-items: baseline;
-  gap: 9px;
-  margin-bottom: 1px;
+  gap: 10px;
+  margin-bottom: 2px;
 }
 
 .wordmark {
   font-family: Didot, "Bodoni MT", "Playfair Display", "Didot LT STD", "Hoefler Text", Georgia, serif;
-  font-size: 30px;
+  font-size: 42px;
   font-weight: 400;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.02em;
   color: var(--ink);
-  line-height: 1;
+  line-height: 0.95;
   font-feature-settings: "liga" 1;
 }
 .wordmark .wm-4 {
   color: var(--red);
   font-weight: 500;
-  margin-right: 0.01em;
+  margin-right: 0.005em;
 }
 
 .version-tag {
