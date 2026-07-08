@@ -112,7 +112,7 @@
 
     <label class="set-row">
       <span>Volume <small id="tsVolLabel">90%</small></span>
-      <input type="range" id="tsVol" min="0" max="100" value="90" aria-label="Volume">
+      <input type="range" id="tsVol" min="0" max="200" value="90" aria-label="Volume">
     </label>
     <label class="set-row">
       <span>Pan <small id="tsPanLabel">center</small></span>
@@ -178,18 +178,31 @@
       <span>Lo-Fi <small>tape crush over the whole mix &amp; export</small></span>
       <input type="checkbox" id="setLoFi" class="switch">
     </label>
+    <div class="set-row">
+      <span>Presets</span>
+      <div id="lofiPresets" class="seg">
+        <button data-amt="0.3" class="seg-btn">Warm</button>
+        <button data-amt="0.55" class="seg-btn">Cassette</button>
+        <button data-amt="0.78" class="seg-btn">Radio</button>
+        <button data-amt="1" class="seg-btn">Trashed</button>
+      </div>
+    </div>
     <label class="set-row">
-      <span>Lo-Fi intensity</span>
+      <span>Lo-Fi intensity <small id="lofiAmtLabel">80%</small></span>
       <input type="range" id="setLoFiAmt" min="0" max="100" value="80">
     </label>
 
     <h3>Recording</h3>
     <label class="set-row">
+      <span>Mic sensitivity <small id="micGainLabel">100%</small></span>
+      <input type="range" id="setMicGain" min="25" max="400" step="5" value="100">
+    </label>
+    <label class="set-row">
       <span>Count-in <small>one bar of clicks before recording</small></span>
       <input type="checkbox" id="setCountIn" class="switch" checked>
     </label>
     <label class="set-row">
-      <span>Metronome while recording <small>clicks stay out of the mix</small></span>
+      <span>Click through the take <small>keep the metronome going while recording</small></span>
       <input type="checkbox" id="setMetRec" class="switch" checked>
     </label>
     <label class="set-row">

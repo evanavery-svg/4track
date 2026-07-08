@@ -3,7 +3,7 @@
 /* Crumple — a minimalist 4-track recorder.
    Web Audio + MediaRecorder, no dependencies. */
 
-const APP_VERSION = '0.8';
+const APP_VERSION = '0.9';
 const NUM_TRACKS = 4;
 const BEATS_PER_BAR = 4;
 
@@ -165,9 +165,13 @@ const app = {
   monitorGain: null,
   monitorRaf: null,
 
+  recMono: null,
+  recInputGain: null,
+  recDest: null,
+
   projectId: null,
   projectsMeta: [],     // [{ id, name, updated, length, bpm }]
-  prefs: { theme: 'paper', accent: 'blue', texture: 1, lastProject: null },
+  prefs: { theme: 'paper', accent: 'blue', texture: 1, micGain: 1, lastProject: null },
 
   tracks: [],           // { buffer, prevBuffer, name, volume, pan, muted, gainNode, panNode, ui:{} }
   sheetTrack: -1,
@@ -266,11 +270,12 @@ function buildLoFiChain(ctx, amt) {
 
   input.connect(hp); hp.connect(lp); lp.connect(sat); sat.connect(crush); crush.connect(wow); wow.connect(output);
 
-  // tape hiss
+  // tape hiss — gentle; it's seasoning, not the main course
   const noise = ctx.createBufferSource(); noise.buffer = makeNoiseBuffer(ctx); noise.loop = true;
-  const noiseHp = ctx.createBiquadFilter(); noiseHp.type = 'highpass'; noiseHp.frequency.value = 900;
-  const noiseG = ctx.createGain(); noiseG.gain.value = 0.003 + amt * 0.02;
-  noise.connect(noiseHp); noiseHp.connect(noiseG); noiseG.connect(output);
+  const noiseHp = ctx.createBiquadFilter(); noiseHp.type = 'highpass'; noiseHp.frequency.value = 1400;
+  const noiseLp = ctx.createBiquadFilter(); noiseLp.type = 'lowpass'; noiseLp.frequency.value = 7000;
+  const noiseG = ctx.createGain(); noiseG.gain.value = 0.0009 + amt * 0.005;
+  noise.connect(noiseHp); noiseHp.connect(noiseLp); noiseLp.connect(noiseG); noiseG.connect(output);
   noise.start();
 
   output.gain.value = 1 + amt * 0.25;         // makeup for filtering losses
@@ -304,8 +309,8 @@ async function setMonitor(on) {
   if (!app.monitorGain) {
     app.monitorGain = app.ctx.createGain();
     app.monitorGain.gain.value = 1;
-    app.micSourceNode.connect(app.monitorGain);
-    app.monitorGain.connect(app.ctx.destination);  // dry, pre-effects monitoring
+    app.recInputGain.connect(app.monitorGain);      // hear the post-sensitivity signal
+    app.monitorGain.connect(app.ctx.destination);   // dry, pre-effects monitoring
   }
   toast('Monitoring input — use headphones');
   startMonitorMeter();
@@ -313,7 +318,7 @@ async function setMonitor(on) {
 
 function stopMonitor() {
   if (app.monitorGain) {
-    try { app.micSourceNode && app.micSourceNode.disconnect(app.monitorGain); } catch (_) {}
+    try { app.recInputGain && app.recInputGain.disconnect(app.monitorGain); } catch (_) {}
     try { app.monitorGain.disconnect(); } catch (_) {}
     app.monitorGain = null;
   }
@@ -491,8 +496,11 @@ function startBeatScheduler() {
   stopBeatScheduler();
   app.nextTick = Math.ceil(app.playStartPos / secPerTick() - 1e-6);
   app.schedTimer = setInterval(() => {
+    // Metronome button is the master switch. While recording, it also has to
+    // be armed for the take (metRec) — turning the metronome off always stops
+    // the click, even mid-record. (Count-in is separate and still plays.)
     const wantClicks = app.state === 'playing' ? app.met
-      : app.state === 'recording' ? (app.metRec || app.met) : false;
+      : app.state === 'recording' ? (app.met && app.metRec) : false;
     if (!wantClicks) { app.nextTick = Math.ceil(currentPos() / secPerTick()); return; }
     const horizon = app.ctx.currentTime + 0.14;
     while (true) {
@@ -514,13 +522,34 @@ function stopBeatScheduler() {
 async function getMic() {
   if (app.micStream && app.micStream.getAudioTracks().some(t => t.readyState === 'live')) return app.micStream;
   app.micStream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
   });
-  app.micSourceNode = app.ctx.createMediaStreamSource(app.micStream);
-  app.micAnalyser = app.ctx.createAnalyser();
+  const ctx = app.ctx;
+  app.micSourceNode = ctx.createMediaStreamSource(app.micStream);
+
+  // Force mono (channel 0) so a device that only feeds the left channel still
+  // records centered instead of left-only. Route through an input-gain node so
+  // "mic sensitivity" can boost quiet inputs, and record THAT stream.
+  app.recMono = ctx.createGain();
+  app.recMono.channelCountMode = 'explicit';
+  app.recMono.channelCount = 1;
+  app.recMono.channelInterpretation = 'discrete';
+  app.recInputGain = ctx.createGain();
+  app.recInputGain.gain.value = app.prefs.micGain ?? 1;
+  app.recDest = ctx.createMediaStreamDestination();
+  app.micAnalyser = ctx.createAnalyser();
   app.micAnalyser.fftSize = 1024;
-  app.micSourceNode.connect(app.micAnalyser); // analysis; monitoring routed separately
+
+  app.micSourceNode.connect(app.recMono);
+  app.recMono.connect(app.recInputGain);
+  app.recInputGain.connect(app.recDest);      // captured by MediaRecorder
+  app.recInputGain.connect(app.micAnalyser);  // meter reflects sensitivity
   return app.micStream;
+}
+
+function applyMicGain() {
+  const g = app.prefs.micGain ?? 1;
+  if (app.recInputGain) app.recInputGain.gain.setTargetAtTime(g, app.ctx.currentTime, 0.02);
 }
 
 function pickMime() {
@@ -543,13 +572,12 @@ async function toggleRecord(i) {
   if (!navigator.mediaDevices || !window.MediaRecorder) {
     toast('Recording is not supported in this browser'); return;
   }
-  let stream;
-  try { stream = await getMic(); }
+  try { await getMic(); }
   catch (_) { toast('Microphone access is needed to record'); return; }
 
   const mime = pickMime();
   app.recChunks = [];
-  app.recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  app.recorder = new MediaRecorder(app.recDest.stream, mime ? { mimeType: mime } : undefined);
   app.recorder.ondataavailable = (e) => { if (e.data && e.data.size) app.recChunks.push(e.data); };
   app.recorder.onstop = () => finalizeTake(i);
   app.recDiscard = false;
@@ -605,17 +633,24 @@ async function finalizeTake(i) {
     const keep = raw.length - trim;
     if (keep < sr * 0.12) { toast('Take was too short'); redrawAllWaves(); return; }
 
+    // Store as mono so it always plays centered (never left-only), and de-click
+    // the edges with short ~6ms fades. Prefer channel 0; fall back to whichever
+    // channel actually carries signal if ch0 is silent.
     const pad = Math.floor(app.recStartPos * sr);
-    const out = app.ctx.createBuffer(raw.numberOfChannels, pad + keep, sr);
-    const fadeN = Math.min(Math.floor(sr * 0.006), keep >> 1);   // ~6ms de-click fades
-    for (let c = 0; c < raw.numberOfChannels; c++) {
-      const d = out.getChannelData(c);
-      d.set(raw.getChannelData(c).subarray(trim), pad);
-      for (let k = 0; k < fadeN; k++) {
-        const gn = k / fadeN;
-        d[pad + k] *= gn;
-        d[pad + keep - 1 - k] *= gn;
-      }
+    const out = app.ctx.createBuffer(1, pad + keep, sr);
+    const d = out.getChannelData(0);
+    let srcCh = raw.getChannelData(0);
+    if (raw.numberOfChannels > 1) {
+      const e0 = channelEnergy(raw.getChannelData(0));
+      const e1 = channelEnergy(raw.getChannelData(1));
+      if (e1 > e0 * 4) srcCh = raw.getChannelData(1);   // signal was on the other channel
+    }
+    d.set(srcCh.subarray(trim), pad);
+    const fadeN = Math.min(Math.floor(sr * 0.006), keep >> 1);
+    for (let k = 0; k < fadeN; k++) {
+      const gn = k / fadeN;
+      d[pad + k] *= gn;
+      d[pad + keep - 1 - k] *= gn;
     }
 
     const t = app.tracks[trackIdx];
@@ -633,6 +668,13 @@ async function finalizeTake(i) {
     console.error(err);
     toast('Could not process that take');
   }
+}
+
+function channelEnergy(d) {
+  let s = 0;
+  const step = Math.max(1, Math.floor(d.length / 4000));
+  for (let i = 0; i < d.length; i += step) s += Math.abs(d[i]);
+  return s;
 }
 
 function peakOf(buffer) {
@@ -1387,9 +1429,19 @@ function updateTimeUI() {
 
 /* ---------------- sheets ---------------- */
 
+function markLoFiPreset() {
+  for (const b of document.querySelectorAll('#lofiPresets .seg-btn')) {
+    b.setAttribute('aria-pressed', String(Math.abs(+b.dataset.amt - app.lofiAmt) < 0.02));
+  }
+}
+
 function syncSettingsUI() {
   $('#setLoFi').checked = app.lofi;
   $('#setLoFiAmt').value = Math.round(app.lofiAmt * 100);
+  $('#lofiAmtLabel').textContent = `${Math.round(app.lofiAmt * 100)}%`;
+  markLoFiPreset();
+  $('#setMicGain').value = Math.round((app.prefs.micGain ?? 1) * 100);
+  $('#micGainLabel').textContent = `${Math.round((app.prefs.micGain ?? 1) * 100)}%`;
   $('#setCountIn').checked = app.countIn;
   $('#setMetRec').checked = app.metRec;
   $('#setMetVol').value = Math.round(app.metVol * 100);
@@ -1590,8 +1642,24 @@ function wireSheets() {
   });
   $('#setLoFiAmt').addEventListener('input', (e) => {
     app.lofiAmt = e.target.value / 100;
+    $('#lofiAmtLabel').textContent = `${Math.round(app.lofiAmt * 100)}%`;
+    markLoFiPreset();
     if (app.lofi) rebuildLoFi();
     saveSettingsSoon();
+  });
+  for (const b of document.querySelectorAll('#lofiPresets .seg-btn')) {
+    b.addEventListener('click', () => {
+      app.lofiAmt = +b.dataset.amt;
+      app.lofi = true;
+      ensureCtx();
+      syncSettingsUI(); rebuildLoFi(); updateLoFiBadge(); saveSettingsSoon();
+      toast(`Lo-Fi — ${b.textContent}`);
+    });
+  }
+  $('#setMicGain').addEventListener('input', (e) => {
+    app.prefs.micGain = +e.target.value / 100;
+    $('#micGainLabel').textContent = `${e.target.value}%`;
+    applyMicGain(); savePrefs();
   });
   $('#setCountIn').addEventListener('change', (e) => { app.countIn = e.target.checked; saveSettingsSoon(); });
   $('#setMetRec').addEventListener('change', (e) => { app.metRec = e.target.checked; saveSettingsSoon(); });
