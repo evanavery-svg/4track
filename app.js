@@ -3,7 +3,7 @@
 /* Crumple — a minimalist 4-track recorder.
    Web Audio + MediaRecorder, no dependencies. */
 
-const APP_VERSION = '0.9';
+const APP_VERSION = '0.10';
 const NUM_TRACKS = 4;
 const BEATS_PER_BAR = 4;
 
@@ -168,6 +168,10 @@ const app = {
   recMono: null,
   recInputGain: null,
   recDest: null,
+
+  tunerAnalyser: null,
+  tunerTimer: null,
+  tunerSmooth: 0,
 
   projectId: null,
   projectsMeta: [],     // [{ id, name, updated, length, bpm }]
@@ -343,6 +347,99 @@ function startMonitorMeter() {
 function stopMonitorMeter() {
   if (app.monitorRaf) { cancelAnimationFrame(app.monitorRaf); app.monitorRaf = null; }
   const bar = $('#tsLevelFill'); if (bar) bar.style.transform = 'scaleX(0)';
+}
+
+/* ---------------- tuner (autocorrelation pitch detection) ---------------- */
+
+const NOTE_NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+const noteFromPitch = (freq) => Math.round(12 * Math.log2(freq / 440) + 69);
+const freqFromNote = (n) => 440 * Math.pow(2, (n - 69) / 12);
+const centsOff = (freq, n) => Math.round(1200 * Math.log2(freq / freqFromNote(n)));
+
+function autoCorrelate(buf, sampleRate) {
+  const SIZE = buf.length;
+  let rms = 0;
+  for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
+  rms = Math.sqrt(rms / SIZE);
+  if (rms < 0.008) return -1;                 // too quiet to trust
+
+  // trim leading/trailing near-silence
+  let r1 = 0, r2 = SIZE - 1;
+  const thres = 0.2;
+  for (let i = 0; i < SIZE / 2; i++) if (Math.abs(buf[i]) < thres) { r1 = i; break; }
+  for (let i = 1; i < SIZE / 2; i++) if (Math.abs(buf[SIZE - i]) < thres) { r2 = SIZE - i; break; }
+  const b = buf.slice(r1, r2);
+  const n = b.length;
+  if (n < 128) return -1;
+
+  const c = new Float32Array(n);
+  for (let i = 0; i < n; i++) for (let j = 0; j < n - i; j++) c[i] += b[j] * b[j + i];
+
+  let d = 0; while (d < n - 1 && c[d] > c[d + 1]) d++;
+  let maxval = -1, maxpos = -1;
+  for (let i = d; i < n; i++) if (c[i] > maxval) { maxval = c[i]; maxpos = i; }
+  let T0 = maxpos;
+  if (T0 <= 0) return -1;
+
+  // parabolic interpolation around the peak for sub-sample accuracy
+  const x1 = c[T0 - 1] || 0, x2 = c[T0], x3 = c[T0 + 1] || 0;
+  const a = (x1 + x3 - 2 * x2) / 2, bb = (x3 - x1) / 2;
+  if (a) T0 = T0 - bb / (2 * a);
+
+  const freq = sampleRate / T0;
+  return (freq >= 55 && freq <= 1500) ? freq : -1;   // plausible guitar range
+}
+
+async function openTuner() {
+  ensureCtx();
+  try { await getMic(); }
+  catch (_) { toast('Microphone access is needed to tune'); return; }
+  if (!app.tunerAnalyser) {
+    app.tunerAnalyser = app.ctx.createAnalyser();
+    app.tunerAnalyser.fftSize = 4096;
+    app.recInputGain.connect(app.tunerAnalyser);
+  }
+  closeSheets();
+  $('#tunerSheet').hidden = false;
+  app.tunerSmooth = 0;
+  startTunerLoop();
+}
+
+function startTunerLoop() {
+  stopTunerLoop();
+  app._tunerMiss = 0;
+  app.tunerTimer = setInterval(tunerDetect, 85);
+}
+function stopTunerLoop() {
+  if (app.tunerTimer) { clearInterval(app.tunerTimer); app.tunerTimer = null; }
+}
+
+function tunerDetect() {
+  if (!app.tunerAnalyser) return;
+  const buf = new Float32Array(app.tunerAnalyser.fftSize);
+  app.tunerAnalyser.getFloatTimeDomainData(buf);
+  const freq = autoCorrelate(buf, app.ctx.sampleRate);
+  const disp = $('#tunerDisplay');
+  if (freq <= 0) {
+    if (++app._tunerMiss > 6) {
+      app.tunerSmooth = 0;
+      $('#tunerFreq').textContent = 'play a note…';
+      disp.classList.remove('in-tune', 'flat', 'sharp');
+    }
+    return;
+  }
+  app._tunerMiss = 0;
+  app.tunerSmooth = app.tunerSmooth ? app.tunerSmooth * 0.6 + freq * 0.4 : freq;
+  const f = app.tunerSmooth;
+  const note = noteFromPitch(f);
+  const cents = centsOff(f, note);
+  const octave = Math.floor(note / 12) - 1;
+  $('#tunerNote').innerHTML = `${NOTE_NAMES[((note % 12) + 12) % 12]}<sub>${octave}</sub>`;
+  $('#tunerFreq').textContent = `${f.toFixed(1)} Hz · ${cents >= 0 ? '+' : ''}${cents}¢`;
+  $('#tunerNeedle').style.left = clamp(50 + cents, 1, 99) + '%';
+  disp.classList.toggle('in-tune', Math.abs(cents) <= 5);
+  disp.classList.toggle('flat', cents < -5);
+  disp.classList.toggle('sharp', cents > 5);
 }
 
 /* ---------------- transport ---------------- */
@@ -1462,10 +1559,12 @@ function updateLoFiBadge() {
 
 function closeSheets() {
   stopMonitor();
+  stopTunerLoop();
   $('#settingsSheet').hidden = true;
   $('#projectsSheet').hidden = true;
   $('#trackSheet').hidden = true;
   $('#exportSheet').hidden = true;
+  $('#tunerSheet').hidden = true;
 }
 
 /* ---- per-track options sheet ---- */
@@ -1626,8 +1725,10 @@ function wireSheets() {
     $('#settingsSheet').hidden = true;
     $('#projectsSheet').hidden = false;
   });
+  $('#tunerBtn').addEventListener('click', openTuner);
+  $('#tunerDone').addEventListener('click', closeSheets);
   $('#closeSettingsBtn').addEventListener('click', closeSheets);
-  for (const id of ['settingsSheet', 'projectsSheet']) {
+  for (const id of ['settingsSheet', 'projectsSheet', 'tunerSheet']) {
     $(`#${id}`).addEventListener('click', (e) => { if (e.target === $(`#${id}`)) closeSheets(); });
   }
   $('#newProjectBtn').addEventListener('click', async () => {

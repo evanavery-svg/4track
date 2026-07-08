@@ -27,6 +27,9 @@
       <input id="projectName" class="project-name" value="New Demo" maxlength="40"
              aria-label="Project name" autocomplete="off" spellcheck="false">
     </div>
+    <button id="tunerBtn" class="icon-btn" aria-label="Tuner" title="Tuner">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M8 3v7a4 4 0 0 0 3 3.87V19.1a2 2 0 1 0 2 0v-5.23A4 4 0 0 0 16 10V3h-2v7a2 2 0 0 1-4 0V3H8z"/></svg>
+    </button>
     <button id="projectsBtn" class="icon-btn" aria-label="Projects" title="Projects">
       <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 5.5A2.5 2.5 0 0 1 6.5 3h3.2c.7 0 1.4.3 1.9.8l1 1.2h4.9A2.5 2.5 0 0 1 20 7.5v9A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-11zm2.5-.5a.5.5 0 0 0-.5.5V8h12v-.5a.5.5 0 0 0-.5-.5h-5.8l-1.6-1.8a.5.5 0 0 0-.4-.2H6.5z"/></svg>
     </button>
@@ -75,6 +78,26 @@
     <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M11 3h2v10.2l3.6-3.6L18 11l-6 6-6-6 1.4-1.4L11 13.2zM4 19h16v2H4z"/></svg>
   </button>
 </footer>
+
+<div id="tunerSheet" class="sheet" hidden>
+  <div class="sheet-card" role="dialog" aria-label="Tuner" aria-modal="true">
+    <div class="sheet-handle"></div>
+    <h2>Tuner</h2>
+    <div id="tunerDisplay" class="tuner-display">
+      <div id="tunerNote" class="tuner-note">—</div>
+      <div class="tuner-scale">
+        <span class="tuner-mark tuner-mark-c"></span>
+        <div id="tunerNeedle" class="tuner-needle"></div>
+      </div>
+      <div class="tuner-ends"><span>♭</span><span>in tune</span><span>♯</span></div>
+      <div id="tunerFreq" class="tuner-freq">play a note…</div>
+    </div>
+    <p class="set-hint">Standard tuning: E A D G B E</p>
+    <div class="set-actions">
+      <button id="tunerDone" class="primary-btn">Done</button>
+    </div>
+  </div>
+</div>
 
 <div id="exportSheet" class="sheet" hidden>
   <div class="sheet-card" role="dialog" aria-label="Export mix" aria-modal="true">

@@ -3,7 +3,7 @@
 /* Crumple service worker — network-first so every open picks up the latest
    version, with the cache as an offline fallback. Bump VERSION on release. */
 
-const VERSION = '0.9';
+const VERSION = '0.10';
 const CACHE = `crumple-v${VERSION}`;
 const ASSETS = [
   '.',

@@ -843,6 +843,78 @@ input[type="range"]::-moz-range-thumb {
   padding: 2px 0 6px;
   font-variant-numeric: tabular-nums;
 }
+
+/* tuner */
+.tuner-display {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 14px 0 6px;
+  --tuner-color: var(--ink-3);
+}
+.tuner-display.flat, .tuner-display.sharp { --tuner-color: var(--ink); }
+.tuner-display.in-tune { --tuner-color: #34c759; }
+
+.tuner-note {
+  font-family: Didot, "Bodoni MT", "Playfair Display", "Hoefler Text", Georgia, serif;
+  font-size: 68px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--tuner-color);
+  transition: color 0.15s ease;
+}
+.tuner-note sub {
+  font-size: 22px;
+  font-weight: 400;
+  color: var(--ink-3);
+  vertical-align: baseline;
+  margin-left: 2px;
+}
+
+.tuner-scale {
+  position: relative;
+  width: min(90%, 420px);
+  height: 30px;
+  border-radius: 8px;
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line);
+  overflow: hidden;
+}
+.tuner-mark-c {
+  position: absolute;
+  left: 50%; top: 0; bottom: 0;
+  width: 2px;
+  transform: translateX(-50%);
+  background: var(--ink-3);
+  opacity: 0.5;
+}
+.tuner-needle {
+  position: absolute;
+  top: 3px; bottom: 3px;
+  left: 50%;
+  width: 4px;
+  border-radius: 2px;
+  transform: translateX(-50%);
+  background: var(--tuner-color);
+  transition: left 0.09s linear, background-color 0.15s ease;
+}
+
+.tuner-ends {
+  display: flex;
+  justify-content: space-between;
+  width: min(90%, 420px);
+  font-size: 11px;
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+}
+.tuner-ends span:nth-child(2) { color: var(--tuner-color); font-weight: 600; }
+
+.tuner-freq {
+  font-size: 13px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
 .danger-btn:active, .primary-btn:active, .ghost-btn:active { transform: scale(0.97); }
 .danger-btn:disabled, .ghost-btn:disabled { opacity: 0.4; }
 
