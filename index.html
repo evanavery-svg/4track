@@ -22,7 +22,7 @@
     <div class="title-wrap">
       <div class="brand-row">
         <div class="wordmark"><span class="wm-4">4</span>track</div>
-        <span class="version-tag">v0.7 · © Avery</span>
+        <span class="version-tag" id="versionTag">© Avery</span>
       </div>
       <input id="projectName" class="project-name" value="New Demo" maxlength="40"
              aria-label="Project name" autocomplete="off" spellcheck="false">
@@ -111,7 +111,7 @@
     <div id="tsWaveScroll" class="ts-wave-scroll"><canvas id="tsWave"></canvas></div>
 
     <label class="set-row">
-      <span>Volume</span>
+      <span>Volume <small id="tsVolLabel">90%</small></span>
       <input type="range" id="tsVol" min="0" max="100" value="90" aria-label="Volume">
     </label>
     <label class="set-row">
@@ -230,7 +230,7 @@
       <button id="closeSettingsBtn" class="primary-btn">Done</button>
     </div>
     <p class="set-hint">Shortcuts — Space play · 1-4 record track · M metronome · L loop · E export</p>
-    <p class="set-hint">4track v0.7 · © Avery</p>
+    <p class="set-hint" id="versionHint">4track · © Avery</p>
   </div>
 </div>
 

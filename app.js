@@ -3,7 +3,7 @@
 /* Crumple — a minimalist 4-track recorder.
    Web Audio + MediaRecorder, no dependencies. */
 
-const APP_VERSION = '0.7';
+const APP_VERSION = '0.8';
 const NUM_TRACKS = 4;
 const BEATS_PER_BAR = 4;
 
@@ -132,6 +132,7 @@ const app = {
   recStartCtx: 0,       // ctx time when MediaRecorder actually started
   recStartPos: 0,       // timeline position the take is punched in at
   recDiscard: false,
+  livePeaks: [],        // {p: timeline pos, v: peak} sampled while recording
 
   state: 'idle',        // idle | playing | recording
   pos: 0,               // timeline position in seconds
@@ -342,7 +343,17 @@ function stopMonitorMeter() {
 /* ---------------- transport ---------------- */
 
 function stopSources() {
-  for (const s of app.sources) { try { s.stop(); } catch (_) {} }
+  if (!app.sources.length) return;
+  if (app.ctx && app.master) {
+    // brief master duck so stopping/seeking doesn't pop
+    const now = app.ctx.currentTime;
+    app.master.gain.cancelScheduledValues(now);
+    app.master.gain.setTargetAtTime(0.0001, now, 0.004);
+    app.master.gain.setTargetAtTime(1, now + 0.05, 0.012);
+    for (const s of app.sources) { try { s.stop(now + 0.03); } catch (_) {} }
+  } else {
+    for (const s of app.sources) { try { s.stop(); } catch (_) {} }
+  }
   app.sources = [];
 }
 
@@ -557,6 +568,7 @@ async function toggleRecord(i) {
   app.recStartPos = app.pos;
   app.recT0 = t0;
   app.recTrack = i;
+  app.livePeaks = [];
   startSources(app.recStartPos, t0, i);
   app.playStartCtx = t0;
   app.playStartPos = app.recStartPos;
@@ -578,7 +590,7 @@ async function finalizeTake(i) {
   const trackIdx = app.recTrack;
   app.recTrack = -1;
   updateTransportUI();
-  if (app.recDiscard || !chunks.length || trackIdx !== i) return;
+  if (app.recDiscard || !chunks.length || trackIdx !== i) { redrawAllWaves(); return; }
 
   try {
     const blob = new Blob(chunks, { type: chunks[0].type });
@@ -591,12 +603,19 @@ async function finalizeTake(i) {
     const sr = raw.sampleRate;
     const trim = Math.min(Math.floor(trimSec * sr), raw.length);
     const keep = raw.length - trim;
-    if (keep < sr * 0.12) { toast('Take was too short'); return; }
+    if (keep < sr * 0.12) { toast('Take was too short'); redrawAllWaves(); return; }
 
     const pad = Math.floor(app.recStartPos * sr);
     const out = app.ctx.createBuffer(raw.numberOfChannels, pad + keep, sr);
+    const fadeN = Math.min(Math.floor(sr * 0.006), keep >> 1);   // ~6ms de-click fades
     for (let c = 0; c < raw.numberOfChannels; c++) {
-      out.getChannelData(c).set(raw.getChannelData(c).subarray(trim), pad);
+      const d = out.getChannelData(c);
+      d.set(raw.getChannelData(c).subarray(trim), pad);
+      for (let k = 0; k < fadeN; k++) {
+        const gn = k / fadeN;
+        d[pad + k] *= gn;
+        d[pad + keep - 1 - k] *= gn;
+      }
     }
 
     const t = app.tracks[trackIdx];
@@ -720,6 +739,7 @@ function tick() {
     drawPlayheads();
     updateMeter();
     if (app.state === 'recording') {
+      drawLiveWave();
       const el = app.tracks[app.recTrack]?.ui.recTime;
       if (el) el.textContent = app.pos > app.recStartPos ? fmtTime(app.pos - app.recStartPos, true) : 'count-in…';
     }
@@ -736,11 +756,46 @@ function updateMeter() {
   let peak = 0;
   for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > peak) peak = a; }
   t.ui.meter.style.transform = `scaleX(${clamp(peak * 1.15, 0, 1)})`;
+  if (app.pos > app.recStartPos) app.livePeaks.push({ p: app.pos, v: peak });
+}
+
+/* Live waveform on the armed track while recording — draw what the mic hears. */
+function drawLiveWave() {
+  const i = app.recTrack;
+  if (i < 0) return;
+  const t = app.tracks[i];
+  const wrap = t.ui.waveWrap, canvas = t.ui.canvas;
+  const dpr = window.devicePixelRatio || 1;
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  if (!w) return;
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+    canvas.width = w * dpr; canvas.height = h * dpr;
+  }
+  const g = canvas.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  t.ui.hint.style.display = 'none';
+  const during = Math.max(songLength(), currentPos(), 1);
+  const barW = 2, gap = 1;
+  const buckets = Math.max(1, Math.floor(w / (barW + gap)));
+  const acc = new Float32Array(buckets);
+  for (const e of app.livePeaks) {
+    const b = Math.min(buckets - 1, Math.floor((e.p / during) * buckets));
+    if (e.v > acc[b]) acc[b] = e.v;
+  }
+  const mid = h / 2;
+  g.fillStyle = 'rgba(255, 59, 48, 0.8)';
+  for (let b = 0; b < buckets; b++) {
+    if (!acc[b]) continue;
+    const amp = Math.max(1, acc[b] * (h * 0.86)) / 2;
+    g.fillRect(b * (barW + gap), mid - amp, barW, amp * 2);
+  }
 }
 
 /* ---------------- export ---------------- */
 
 async function exportMix() {
+  if (app.state === 'recording') { toast('Stop recording first'); return; }
   const total = songLength();
   if (!total) { toast('Nothing to export yet'); return; }
   ensureCtx();
@@ -1095,10 +1150,27 @@ async function createProject({ quiet = false } = {}) {
   if (!quiet) toast('New project');
 }
 
+/* Two-tap confirm: first tap arms the button for a moment, second tap fires.
+   Friendlier than confirm() dialogs, which look foreign in a standalone PWA. */
+function armConfirm(btn, armedLabel, fn, restore) {
+  let timer = null;
+  const original = restore || (() => { btn.textContent = btn.dataset.label; });
+  btn.dataset.label = btn.dataset.label || btn.textContent;
+  btn.addEventListener('click', () => {
+    if (btn.classList.contains('armed')) {
+      clearTimeout(timer);
+      btn.classList.remove('armed');
+      original();
+      fn();
+      return;
+    }
+    btn.classList.add('armed');
+    btn.textContent = armedLabel;
+    timer = setTimeout(() => { btn.classList.remove('armed'); original(); }, 2600);
+  });
+}
+
 async function deleteProject(id) {
-  const meta = app.projectsMeta.find(m => m.id === id);
-  const name = (meta && meta.name) || 'this project';
-  if (!confirm(`Delete “${name}”? Its tracks will be gone for good.`)) return;
   stopAll();
   await idb.del(projKey(id, 'settings'));
   for (let i = 0; i < NUM_TRACKS; i++) await idb.del(projKey(id, `audio${i}`));
@@ -1140,7 +1212,9 @@ function renderProjectList() {
       $('#projectsSheet').hidden = true;
       if (m.id !== app.projectId) await openProject(m.id);
     });
-    $('.proj-del', row).addEventListener('click', () => deleteProject(m.id));
+    const delBtn = $('.proj-del', row);
+    const trashIcon = delBtn.innerHTML;
+    armConfirm(delBtn, 'Sure?', () => deleteProject(m.id), () => { delBtn.innerHTML = trashIcon; });
     host.appendChild(row);
   }
 }
@@ -1264,7 +1338,7 @@ function buildTracks() {
       window.addEventListener('pointerup', up);
     });
     t.ui.body.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); openTrackSheet(i); }
+      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); openTrackSheet(i); }
     });
   }
 
@@ -1401,6 +1475,7 @@ function syncTrackSheet(i) {
   if (document.activeElement !== $('#tsName')) $('#tsName').value = t.name;
   $('#tsDur').textContent = t.buffer ? fmtTime(t.buffer.duration) : 'empty';
   $('#tsVol').value = Math.round(t.volume * 100);
+  $('#tsVolLabel').textContent = `${Math.round(t.volume * 100)}%`;
   $('#tsPan').value = Math.round(t.pan * 100);
   $('#tsPanLabel').textContent = panLabel(t.pan);
   $('#tsTone').value = Math.round((t.tone || 0) * 100);
@@ -1434,6 +1509,7 @@ function wireTrackSheet() {
   $('#tsVol').addEventListener('input', () => {
     const t = cur(); if (!t) return;
     t.volume = $('#tsVol').value / 100;
+    $('#tsVolLabel').textContent = `${Math.round(t.volume * 100)}%`;
     if (app.ctx) applyTrackGain(t);
     saveSettingsSoon();
   });
@@ -1547,7 +1623,7 @@ function wireSheets() {
     e.target.value = '';
     if (f) importProjectFile(f);
   });
-  $('#deleteProjectBtn').addEventListener('click', () => {
+  armConfirm($('#deleteProjectBtn'), 'Tap again to delete', () => {
     closeSheets();
     deleteProject(app.projectId);
   });
@@ -1626,10 +1702,14 @@ function wireTransport() {
 
 /* ---------------- keyboard ---------------- */
 
+const anySheetOpen = () =>
+  ['settingsSheet', 'projectsSheet', 'trackSheet', 'exportSheet'].some(id => !$(`#${id}`).hidden);
+
 function wireKeyboard() {
   window.addEventListener('keydown', (e) => {
     if (e.target.matches('input[type="text"], input:not([type]), [contenteditable]')) return;
     if (e.repeat) return;
+    if (anySheetOpen() && e.key !== 'Escape') return;   // don't record/export behind a sheet
     switch (e.key) {
       case ' ':
         e.preventDefault();
@@ -1657,6 +1737,11 @@ function releaseWakeLock() {
 }
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && app.state !== 'idle') requestWakeLock();
+});
+
+// don't let a take vanish because the tab closed mid-recording
+window.addEventListener('beforeunload', (e) => {
+  if (app.state === 'recording') { e.preventDefault(); e.returnValue = ''; }
 });
 
 /* ---------------- forced updates ----------------
@@ -1730,6 +1815,8 @@ function wireUpdateChecks() {
 /* ---------------- boot ---------------- */
 
 async function boot() {
+  $('#versionTag').textContent = `v${APP_VERSION} · © Avery`;
+  $('#versionHint').textContent = `4track v${APP_VERSION} · © Avery`;
   buildTracks();
   buildAppearancePickers();
   wireTransport();
