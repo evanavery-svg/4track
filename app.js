@@ -3,7 +3,7 @@
 /* Crumple — a minimalist 4-track recorder.
    Web Audio + MediaRecorder, no dependencies. */
 
-const APP_VERSION = '0.10';
+const APP_VERSION = '0.12';
 const NUM_TRACKS = 4;
 const BEATS_PER_BAR = 4;
 
@@ -173,9 +173,12 @@ const app = {
   tunerTimer: null,
   tunerSmooth: 0,
 
+  outputPre: null,
+  outputComp: null,
+
   projectId: null,
   projectsMeta: [],     // [{ id, name, updated, length, bpm }]
-  prefs: { theme: 'paper', accent: 'blue', texture: 1, micGain: 1, lastProject: null },
+  prefs: { theme: 'paper', accent: 'blue', texture: 1, micGain: 1, speakerBoost: false, lastProject: null },
 
   tracks: [],           // { buffer, prevBuffer, name, volume, pan, muted, gainNode, panNode, ui:{} }
   sheetTrack: -1,
@@ -191,8 +194,8 @@ function ensureCtx() {
   if (!app.ctx) {
     app.ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     app.master = app.ctx.createGain();
-    app.master.connect(app.ctx.destination);
-    app.busInput = app.ctx.createGain();     // all tracks feed here; lofi sits between bus and master
+    rebuildOutputStage();                    // master -> [speaker boost] -> destination
+    app.busInput = app.ctx.createGain();     // all tracks feed into master; lofi sits between bus and master
     for (const t of app.tracks) {
       t.gainNode = app.ctx.createGain();
       t.panNode = app.ctx.createStereoPanner ? app.ctx.createStereoPanner() : null;
@@ -303,21 +306,50 @@ function rebuildLoFi() {
   }
 }
 
+/* Speaker boost: phone speakers are physically quiet and can't be made
+   louder by a web page — the OS volume is out of reach. What DOES help is
+   driving the signal harder into a fast limiter so quiet mixes sound louder
+   without clipping. Playback-only; export stays clean/untouched so shared
+   files aren't artificially squashed. */
+function rebuildOutputStage() {
+  if (!app.ctx || !app.master) return;
+  try { app.master.disconnect(); } catch (_) {}
+  if (app.outputPre) { try { app.outputPre.disconnect(); } catch (_) {} app.outputPre = null; }
+  if (app.outputComp) { try { app.outputComp.disconnect(); } catch (_) {} app.outputComp = null; }
+
+  if (app.prefs.speakerBoost) {
+    app.outputPre = app.ctx.createGain();
+    app.outputPre.gain.value = 3.2;   // drive hard into the limiter (~+10dB)
+    app.outputComp = app.ctx.createDynamicsCompressor();
+    app.outputComp.threshold.value = -8;
+    app.outputComp.knee.value = 0;
+    app.outputComp.ratio.value = 20;   // near brick-wall at Web Audio's ceiling
+    app.outputComp.attack.value = 0.001;
+    app.outputComp.release.value = 0.1;
+    app.master.connect(app.outputPre);
+    app.outputPre.connect(app.outputComp);
+    app.outputComp.connect(app.ctx.destination);
+  } else {
+    app.master.connect(app.ctx.destination);
+  }
+}
+
 /* ---------------- input monitor / level check ---------------- */
 
 async function setMonitor(on) {
   if (!on) { stopMonitor(); return; }
   ensureCtx();
   try { await getMic(); }
-  catch (_) { toast('Microphone access is needed'); const sw = $('#tsMonitor'); if (sw) sw.checked = false; return; }
+  catch (_) { toast('Microphone access is needed'); syncMonitorUI(); return; }
   if (!app.monitorGain) {
     app.monitorGain = app.ctx.createGain();
     app.monitorGain.gain.value = 1;
     app.recInputGain.connect(app.monitorGain);      // hear the post-sensitivity signal
-    app.monitorGain.connect(app.ctx.destination);   // dry, pre-effects monitoring
+    app.monitorGain.connect(app.ctx.destination);   // dry, pre-effects monitoring — persists through recording
   }
-  toast('Monitoring input — use headphones');
+  toast('Monitoring input — use headphones to avoid feedback');
   startMonitorMeter();
+  syncMonitorUI();
 }
 
 function stopMonitor() {
@@ -327,7 +359,14 @@ function stopMonitor() {
     app.monitorGain = null;
   }
   stopMonitorMeter();
-  const sw = $('#tsMonitor'); if (sw) sw.checked = false;
+  syncMonitorUI();
+}
+
+function syncMonitorUI() {
+  const on = !!app.monitorGain;
+  const sw = $('#tsMonitor'); if (sw) sw.checked = on;
+  const badge = $('#monitorBadge');
+  if (badge) badge.setAttribute('aria-pressed', String(on));
 }
 
 function startMonitorMeter() {
@@ -663,7 +702,10 @@ async function toggleRecord(i) {
     return;                     // stopped another track; press again to arm
   }
   if (app.state === 'playing') stopAll();
-  stopMonitor();            // never monitor into a live take (feedback)
+  // Input monitor (if on) deliberately keeps running into the take — that's
+  // the point of turning it on. It's a separate tap off the mic node, so it
+  // doesn't touch what gets recorded; the only risk is acoustic feedback if
+  // you're not on headphones, which we warn about when it's switched on.
   ensureCtx();
 
   if (!navigator.mediaDevices || !window.MediaRecorder) {
@@ -1533,6 +1575,7 @@ function markLoFiPreset() {
 }
 
 function syncSettingsUI() {
+  $('#setSpeakerBoost').checked = !!app.prefs.speakerBoost;
   $('#setLoFi').checked = app.lofi;
   $('#setLoFiAmt').value = Math.round(app.lofiAmt * 100);
   $('#lofiAmtLabel').textContent = `${Math.round(app.lofiAmt * 100)}%`;
@@ -1558,7 +1601,7 @@ function updateLoFiBadge() {
 }
 
 function closeSheets() {
-  stopMonitor();
+  stopMonitorMeter();   // the level bar lives in the track sheet; stop animating it once hidden
   stopTunerLoop();
   $('#settingsSheet').hidden = true;
   $('#projectsSheet').hidden = true;
@@ -1647,6 +1690,7 @@ function openTrackSheet(i) {
   $('#projectsSheet').hidden = true;
   $('#trackSheet').hidden = false;
   requestAnimationFrame(() => drawSheetWave(i));
+  if (app.monitorGain) startMonitorMeter();   // resume the level bar if monitor's already on
 }
 
 function wireTrackSheet() {
@@ -1734,6 +1778,13 @@ function wireSheets() {
   $('#newProjectBtn').addEventListener('click', async () => {
     closeSheets();
     await createProject();
+  });
+  $('#setSpeakerBoost').addEventListener('change', (e) => {
+    app.prefs.speakerBoost = e.target.checked;
+    if (app.prefs.speakerBoost) ensureCtx();
+    if (app.ctx) rebuildOutputStage();
+    savePrefs();
+    toast(app.prefs.speakerBoost ? 'Speaker boost on' : 'Speaker boost off');
   });
   $('#setLoFi').addEventListener('change', (e) => {
     app.lofi = e.target.checked;
@@ -1866,6 +1917,7 @@ function wireTransport() {
     rebuildLoFi(); updateLoFiBadge(); syncSettingsUI(); saveSettingsSoon();
     toast('Lo-Fi off');
   });
+  $('#monitorBadge').addEventListener('click', () => setMonitor(!app.monitorGain));
   $('#projectName').addEventListener('input', saveSettingsSoon);
 }
 
@@ -2004,6 +2056,7 @@ async function boot() {
     if (prefs) Object.assign(app.prefs, prefs);
   } catch (_) {}
   applyAppearance();
+  if (app.ctx) rebuildOutputStage();   // in the rare case audio started before prefs loaded
 
   try {
     app.projectsMeta = (await idb.get('projects')) || [];

@@ -40,6 +40,8 @@
   <div class="time-row">
     <div id="timeDisplay" class="time-display">0:00<span class="time-frac">.0</span></div>
     <div id="lengthDisplay" class="length-display">&nbsp;</div>
+    <button id="monitorBadge" class="monitor-badge" aria-pressed="false"
+            title="Hear yourself through headphones — stays on through recording">MONITOR</button>
     <button id="lofiBadge" class="lofi-badge" hidden title="Lo-Fi is on — tap to turn off">LO-FI</button>
   </div>
   <div id="loopBar" class="loop-bar" hidden>
@@ -194,6 +196,12 @@
     <label class="set-row">
       <span>Paper texture</span>
       <input type="range" id="setTexture" min="0" max="200" value="100">
+    </label>
+
+    <h3>Playback</h3>
+    <label class="set-row">
+      <span>Speaker boost <small>louder on your phone's own speaker — playback only, exports stay clean</small></span>
+      <input type="checkbox" id="setSpeakerBoost" class="switch">
     </label>
 
     <h3>Effects</h3>
