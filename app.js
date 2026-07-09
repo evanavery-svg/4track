@@ -3,7 +3,7 @@
 /* Crumple — a minimalist 4-track recorder.
    Web Audio + MediaRecorder, no dependencies. */
 
-const APP_VERSION = '0.12';
+const APP_VERSION = '0.13';
 const NUM_TRACKS = 4;
 const BEATS_PER_BAR = 4;
 
@@ -175,6 +175,8 @@ const app = {
 
   outputPre: null,
   outputComp: null,
+  outputMakeup: null,
+  outputClip: null,
 
   projectId: null,
   projectsMeta: [],     // [{ id, name, updated, length, bpm }]
@@ -306,29 +308,48 @@ function rebuildLoFi() {
   }
 }
 
-/* Speaker boost: phone speakers are physically quiet and can't be made
-   louder by a web page — the OS volume is out of reach. What DOES help is
-   driving the signal harder into a fast limiter so quiet mixes sound louder
-   without clipping. Playback-only; export stays clean/untouched so shared
-   files aren't artificially squashed. */
+function makeMaxCurve(drive, ceiling) {
+  const n = 2048, c = new Float32Array(n), norm = Math.tanh(drive);
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    c[i] = ceiling * Math.tanh(drive * x) / norm;   // soft-clip: bounded, saturates instead of hard-clipping
+  }
+  return c;
+}
+
+/* Speaker boost: phone speakers are physically quiet and a web page can't
+   touch the OS volume. A loudness maximizer is what actually helps —
+   drive -> fast limiter -> makeup -> soft-clip ceiling — so even quiet
+   takes come out near full scale, dramatically louder, capped by tanh
+   saturation rather than harsh digital clipping. Playback only; export
+   builds its own graph and stays clean, so shared files aren't squashed. */
 function rebuildOutputStage() {
   if (!app.ctx || !app.master) return;
   try { app.master.disconnect(); } catch (_) {}
-  if (app.outputPre) { try { app.outputPre.disconnect(); } catch (_) {} app.outputPre = null; }
-  if (app.outputComp) { try { app.outputComp.disconnect(); } catch (_) {} app.outputComp = null; }
+  for (const k of ['outputPre', 'outputComp', 'outputMakeup', 'outputClip']) {
+    if (app[k]) { try { app[k].disconnect(); } catch (_) {} app[k] = null; }
+  }
 
   if (app.prefs.speakerBoost) {
     app.outputPre = app.ctx.createGain();
-    app.outputPre.gain.value = 3.2;   // drive hard into the limiter (~+10dB)
+    app.outputPre.gain.value = 4;                    // drive into the limiter (~+12dB)
     app.outputComp = app.ctx.createDynamicsCompressor();
-    app.outputComp.threshold.value = -8;
+    app.outputComp.threshold.value = -24;
     app.outputComp.knee.value = 0;
-    app.outputComp.ratio.value = 20;   // near brick-wall at Web Audio's ceiling
-    app.outputComp.attack.value = 0.001;
-    app.outputComp.release.value = 0.1;
+    app.outputComp.ratio.value = 20;
+    app.outputComp.attack.value = 0.002;
+    app.outputComp.release.value = 0.12;
+    app.outputMakeup = app.ctx.createGain();
+    app.outputMakeup.gain.value = 4;                 // bring the limited signal back up to the ceiling
+    app.outputClip = app.ctx.createWaveShaper();
+    app.outputClip.curve = makeMaxCurve(2, 0.98);    // bounded soft-clip, ~-0.2 dBFS ceiling
+    app.outputClip.oversample = '4x';
+
     app.master.connect(app.outputPre);
     app.outputPre.connect(app.outputComp);
-    app.outputComp.connect(app.ctx.destination);
+    app.outputComp.connect(app.outputMakeup);
+    app.outputMakeup.connect(app.outputClip);
+    app.outputClip.connect(app.ctx.destination);
   } else {
     app.master.connect(app.ctx.destination);
   }
