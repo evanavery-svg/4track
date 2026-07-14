@@ -862,6 +862,52 @@ input[type="range"]::-moz-range-thumb {
   font-variant-numeric: tabular-nums;
 }
 
+/* notes */
+.notes-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin-bottom: 10px;
+  min-width: 0;
+}
+.notes-project {
+  font-size: 12.5px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.notes-area {
+  width: 100%;
+  min-height: 42vh;
+  max-height: 58vh;
+  resize: none;
+  border: none;
+  outline: none;
+  background: var(--paper);
+  color: var(--ink);
+  border-radius: 12px;
+  padding: 14px;
+  box-sizing: border-box;
+  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  box-shadow: inset 0 0 0 1px var(--line);
+  -webkit-user-select: text;
+  user-select: text;
+}
+.notes-area::placeholder { color: var(--ink-3); }
+
+/* little dot on the Notes button when the current project has notes */
+.icon-btn.has-notes { position: relative; }
+.icon-btn.has-notes::after {
+  content: "";
+  position: absolute;
+  top: 3px; right: 3px;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--card);
+}
+
 /* tuner */
 .tuner-display {
   display: grid;

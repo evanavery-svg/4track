@@ -3,7 +3,7 @@
 /* Crumple — a minimalist 4-track recorder.
    Web Audio + MediaRecorder, no dependencies. */
 
-const APP_VERSION = '0.16';
+const APP_VERSION = '0.17';
 const NUM_TRACKS = 4;
 const BEATS_PER_BAR = 4;
 
@@ -153,6 +153,8 @@ const app = {
   latencyMs: 0,
   nextTick: 0,
   schedTimer: null,
+
+  notes: '',            // free-text notes, unique per project
 
   exportBlob: null,
   exportName: 'demo',
@@ -1231,6 +1233,7 @@ function currentSettings() {
     metVol: app.metVol, countIn: app.countIn, latencyMs: app.latencyMs,
     loopA: app.loopA, loopB: app.loopB,
     beatsPerBar: app.beatsPerBar, subdiv: app.subdiv,
+    notes: app.notes,
     lofi: app.lofi, lofiAmt: app.lofiAmt,
     tracks: app.tracks.map(t => ({ name: t.name, volume: t.volume, pan: t.pan, muted: t.muted, solo: t.solo, tone: t.tone })),
   };
@@ -1281,6 +1284,7 @@ function applySettings(s) {
   app.loopB = (s && s.loopB != null) ? s.loopB : null;
   app.beatsPerBar = clamp((s && s.beatsPerBar) || 4, 2, 12);
   app.subdiv = clamp((s && s.subdiv) || 1, 1, 4);
+  app.notes = (s && s.notes) || '';
   app.lofi = !!(s && s.lofi);
   app.lofiAmt = (s && s.lofiAmt) ?? 0.8;
   ((s && s.tracks) || []).forEach((m, i) => {
@@ -1614,6 +1618,8 @@ function syncSettingsUI() {
     b.setAttribute('aria-pressed', String(+b.dataset.sub === app.subdiv));
   }
   updateLoFiBadge();
+  updateNotesIndicator();
+  if (!$('#notesSheet').hidden) $('#notesArea').value = app.notes || '';
 }
 
 function updateLoFiBadge() {
@@ -1629,6 +1635,33 @@ function closeSheets() {
   $('#trackSheet').hidden = true;
   $('#exportSheet').hidden = true;
   $('#tunerSheet').hidden = true;
+  $('#notesSheet').hidden = true;
+}
+
+/* ---- per-project notes ---- */
+
+function updateNotesIndicator() {
+  const btn = $('#notesBtn');
+  if (btn) btn.classList.toggle('has-notes', !!(app.notes && app.notes.trim()));
+}
+
+function openNotes() {
+  $('#notesProject').textContent = $('#projectName').value.trim() || 'this project';
+  $('#notesArea').value = app.notes || '';
+  closeSheets();
+  $('#notesSheet').hidden = false;
+  requestAnimationFrame(() => $('#notesArea').focus());
+}
+
+function wireNotes() {
+  $('#notesBtn').addEventListener('click', openNotes);
+  $('#notesDone').addEventListener('click', closeSheets);
+  $('#notesSheet').addEventListener('click', (e) => { if (e.target === $('#notesSheet')) closeSheets(); });
+  $('#notesArea').addEventListener('input', (e) => {
+    app.notes = e.target.value;
+    updateNotesIndicator();
+    saveSettingsSoon();
+  });
 }
 
 /* ---- per-track options sheet ---- */
@@ -1945,11 +1978,11 @@ function wireTransport() {
 /* ---------------- keyboard ---------------- */
 
 const anySheetOpen = () =>
-  ['settingsSheet', 'projectsSheet', 'trackSheet', 'exportSheet'].some(id => !$(`#${id}`).hidden);
+  ['settingsSheet', 'projectsSheet', 'trackSheet', 'exportSheet', 'tunerSheet', 'notesSheet'].some(id => !$(`#${id}`).hidden);
 
 function wireKeyboard() {
   window.addEventListener('keydown', (e) => {
-    if (e.target.matches('input[type="text"], input:not([type]), [contenteditable]')) return;
+    if (e.target.matches('input[type="text"], input:not([type]), textarea, [contenteditable]')) return;
     if (e.repeat) return;
     if (anySheetOpen() && e.key !== 'Escape') return;   // don't record/export behind a sheet
     switch (e.key) {
@@ -2064,6 +2097,7 @@ async function boot() {
   wireTransport();
   wireSheets();
   wireTrackSheet();
+  wireNotes();
   wireKeyboard();
   setupMediaSession();
   updateTransportUI();

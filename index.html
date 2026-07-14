@@ -27,6 +27,9 @@
       <input id="projectName" class="project-name" value="New Demo" maxlength="40"
              aria-label="Project name" autocomplete="off" spellcheck="false">
     </div>
+    <button id="notesBtn" class="icon-btn" aria-label="Notes" title="Notes">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V8h4.5L14 3.5zM8 12h8v1.6H8V12zm0 3.4h8V17H8v-1.6zm0-6.8h4v1.6H8V8.6z"/></svg>
+    </button>
     <button id="tunerBtn" class="icon-btn" aria-label="Tuner" title="Tuner">
       <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M8 3v7a4 4 0 0 0 3 3.87V19.1a2 2 0 1 0 2 0v-5.23A4 4 0 0 0 16 10V3h-2v7a2 2 0 0 1-4 0V3H8z"/></svg>
     </button>
@@ -80,6 +83,20 @@
     <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M11 3h2v10.2l3.6-3.6L18 11l-6 6-6-6 1.4-1.4L11 13.2zM4 19h16v2H4z"/></svg>
   </button>
 </footer>
+
+<div id="notesSheet" class="sheet" hidden>
+  <div class="sheet-card" role="dialog" aria-label="Notes" aria-modal="true">
+    <div class="sheet-handle"></div>
+    <div class="notes-head">
+      <h2>Notes</h2>
+      <span id="notesProject" class="notes-project"></span>
+    </div>
+    <textarea id="notesArea" class="notes-area" placeholder="Lyrics, chords, tunings, ideas…" maxlength="20000" spellcheck="true"></textarea>
+    <div class="set-actions">
+      <button id="notesDone" class="primary-btn">Done</button>
+    </div>
+  </div>
+</div>
 
 <div id="tunerSheet" class="sheet" hidden>
   <div class="sheet-card" role="dialog" aria-label="Tuner" aria-modal="true">
