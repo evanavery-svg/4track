@@ -142,25 +142,19 @@ body::before {
 
 .brand-row {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-bottom: 2px;
+  align-items: flex-end;
+  gap: 9px;
+  margin-bottom: 3px;
 }
 
-.wordmark {
-  font-family: Didot, "Bodoni MT", "Playfair Display", "Didot LT STD", "Hoefler Text", Georgia, serif;
-  font-size: 42px;
-  font-weight: 400;
-  letter-spacing: -0.02em;
-  color: var(--ink);
-  line-height: 0.95;
-  font-feature-settings: "liga" 1;
+.wordmark { line-height: 0; }
+.wordmark svg {
+  height: 38px;
+  width: auto;
+  display: block;
 }
-.wordmark .wm-4 {
-  color: var(--red);
-  font-weight: 500;
-  margin-right: 0.005em;
-}
+.wm-ink { stroke: var(--ink); transition: stroke 0.2s ease; }
+.wm-red { stroke: var(--red); }
 
 .version-tag {
   font-size: 10px;
