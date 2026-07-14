@@ -1,9 +1,9 @@
 'use strict';
 
-/* Crumple — a minimalist 4-track recorder.
+/* 4track — a minimalist 4-track recorder.
    Web Audio + MediaRecorder, no dependencies. */
 
-const APP_VERSION = '0.17';
+const APP_VERSION = '0.18';
 const NUM_TRACKS = 4;
 const BEATS_PER_BAR = 4;
 
@@ -367,8 +367,10 @@ async function setMonitor(on) {
   if (!app.monitorGain) {
     app.monitorGain = app.ctx.createGain();
     app.monitorGain.gain.value = 1;
-    app.recInputGain.connect(app.monitorGain);      // hear the post-sensitivity signal
-    app.monitorGain.connect(app.ctx.destination);   // dry, pre-effects monitoring — persists through recording
+    app.recInputGain.connect(app.monitorGain);              // hear the post-sensitivity signal
+    // into master (post-lofi, pre-boost): monitoring loudness matches playback
+    // when Speaker Boost is on, instead of sounding mysteriously quieter
+    app.monitorGain.connect(app.master || app.ctx.destination);
   }
   toast('Monitoring input — use headphones to avoid feedback');
   startMonitorMeter();
@@ -392,12 +394,21 @@ function syncMonitorUI() {
   if (badge) badge.setAttribute('aria-pressed', String(on));
 }
 
+
+/* reusable analyser scratch buffers — avoid a Float32Array allocation per frame */
+const _scratch = {};
+function scratchFor(analyser, key) {
+  const n = analyser.fftSize;
+  if (!_scratch[key] || _scratch[key].length !== n) _scratch[key] = new Float32Array(n);
+  return _scratch[key];
+}
+
 function startMonitorMeter() {
   stopMonitorMeter();
   const bar = $('#tsLevelFill');
   const loop = () => {
     if (!app.micAnalyser) return;
-    const data = new Float32Array(app.micAnalyser.fftSize);
+    const data = scratchFor(app.micAnalyser, 'monitor');
     app.micAnalyser.getFloatTimeDomainData(data);
     let peak = 0;
     for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > peak) peak = a; }
@@ -478,7 +489,7 @@ function stopTunerLoop() {
 
 function tunerDetect() {
   if (!app.tunerAnalyser) return;
-  const buf = new Float32Array(app.tunerAnalyser.fftSize);
+  const buf = scratchFor(app.tunerAnalyser, 'tuner');
   app.tunerAnalyser.getFloatTimeDomainData(buf);
   const freq = autoCorrelate(buf, app.ctx.sampleRate);
   const disp = $('#tunerDisplay');
@@ -647,7 +658,9 @@ function click(atTime, level = 1) {
   g.gain.setValueAtTime(0.0001, atTime);
   g.gain.exponentialRampToValueAtTime(vol + 0.0001, atTime + 0.002);
   g.gain.exponentialRampToValueAtTime(0.0001, atTime + 0.055);
-  osc.connect(g); g.connect(ctx.destination);
+  // into master (post-lofi, pre-boost): clicks stay clean of Lo-Fi but get
+  // Speaker Boost, so the count-in isn't whisper-quiet next to boosted tracks
+  osc.connect(g); g.connect(app.master || ctx.destination);
   osc.start(atTime); osc.stop(atTime + 0.07);
 }
 
@@ -680,6 +693,15 @@ function stopBeatScheduler() {
 
 async function getMic() {
   if (app.micStream && app.micStream.getAudioTracks().some(t => t.readyState === 'live')) return app.micStream;
+
+  // The stream (and its node graph) is being (re)built. Anything tapped off
+  // the old recInputGain — monitor, tuner — would silently go dead, so
+  // remember what was live and rewire it onto the new nodes below.
+  const wasMonitoring = !!app.monitorGain;
+  const hadTuner = !!app.tunerAnalyser;
+  stopMonitor();
+  if (app.tunerAnalyser) { try { app.tunerAnalyser.disconnect(); } catch (_) {} app.tunerAnalyser = null; }
+
   app.micStream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
   });
@@ -703,6 +725,18 @@ async function getMic() {
   app.recMono.connect(app.recInputGain);
   app.recInputGain.connect(app.recDest);      // captured by MediaRecorder
   app.recInputGain.connect(app.micAnalyser);  // meter reflects sensitivity
+
+  if (hadTuner) {
+    app.tunerAnalyser = ctx.createAnalyser();
+    app.tunerAnalyser.fftSize = 4096;
+    app.recInputGain.connect(app.tunerAnalyser);
+  }
+  if (wasMonitoring) {
+    app.monitorGain = ctx.createGain();
+    app.recInputGain.connect(app.monitorGain);
+    app.monitorGain.connect(app.master || ctx.destination);
+    syncMonitorUI();
+  }
   return app.micStream;
 }
 
@@ -955,7 +989,7 @@ function updateMeter() {
   if (app.state !== 'recording' || !app.micAnalyser) return;
   const t = app.tracks[app.recTrack];
   if (!t) return;
-  const data = new Float32Array(app.micAnalyser.fftSize);
+  const data = scratchFor(app.micAnalyser, 'meter');
   app.micAnalyser.getFloatTimeDomainData(data);
   let peak = 0;
   for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > peak) peak = a; }
@@ -1152,6 +1186,14 @@ function updateMediaSession() {
       album: 'Demo',
       artwork: [{ src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' }],
     });
+    const dur = songLength();
+    if (dur > 0 && navigator.mediaSession.setPositionState) {
+      navigator.mediaSession.setPositionState({
+        duration: dur,
+        position: clamp(app.pos, 0, dur),
+        playbackRate: 1,
+      });
+    }
   } catch (_) {}
 }
 
@@ -1255,6 +1297,7 @@ async function saveSettings() {
       updated: Date.now(),
       length: songLength(),
       bpm: app.bpm,
+      hasNotes: !!(app.notes && app.notes.trim()),
     };
     const idx = app.projectsMeta.findIndex(m => m.id === app.projectId);
     if (idx >= 0) app.projectsMeta[idx] = meta; else app.projectsMeta.push(meta);
@@ -1408,7 +1451,7 @@ function renderProjectList() {
     row.innerHTML = `
       <button class="proj-open" type="button">
         <span class="proj-name"></span>
-        <span class="proj-sub">${fmtTime(m.length || 0)} · ${m.bpm || 120} bpm · ${date}</span>
+        <span class="proj-sub">${fmtTime(m.length || 0)} · ${m.bpm || 120} bpm · ${date}${m.hasNotes ? ' · ✎ notes' : ''}</span>
       </button>
       <button class="proj-del" type="button" aria-label="Delete project">
         <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zM6 9h12l-.9 11.1a2 2 0 0 1-2 1.9H8.9a2 2 0 0 1-2-1.9L6 9zm4 3v7h1.5v-7H10zm3 0v7h1.5v-7H13z"/></svg>
@@ -1584,11 +1627,24 @@ function updateTransportUI() {
 }
 
 function updateTimeUI() {
-  const el = $('#timeDisplay');
   const s = app.state === 'idle' ? app.pos : currentPos();
-  el.innerHTML = `${fmtTime(s)}<span class="time-frac">.${Math.floor((Math.max(0, s) % 1) * 10)}</span>`;
+  const timeStr = `${fmtTime(s)}<span class="time-frac">.${Math.floor((Math.max(0, s) % 1) * 10)}</span>`;
+  if (timeStr !== updateTimeUI._t) {           // runs every frame; only touch the DOM on change
+    updateTimeUI._t = timeStr;
+    $('#timeDisplay').innerHTML = timeStr;
+  }
   const total = songLength();
-  $('#lengthDisplay').textContent = total ? `of ${fmtTime(total)} · ${app.bpm} bpm` : 'ready to record';
+  let lenStr;
+  if (app.state !== 'idle') {
+    const bar = Math.floor(Math.max(0, s) / secPerBeat() / app.beatsPerBar) + 1;
+    lenStr = `bar ${bar} · ${app.bpm} bpm`;
+  } else {
+    lenStr = total ? `of ${fmtTime(total)} · ${app.bpm} bpm` : 'ready to record';
+  }
+  if (lenStr !== updateTimeUI._l) {
+    updateTimeUI._l = lenStr;
+    $('#lengthDisplay').textContent = lenStr;
+  }
 }
 
 /* ---------------- sheets ---------------- */

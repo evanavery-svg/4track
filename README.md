@@ -1,65 +1,101 @@
-# Crumple
+# 4track
 
-**v0.1 · © Avery**
+**v0.18 · © Avery**
 
 A minimalist four-track recorder for demos, built as an installable PWA.
-Crumpled-paper aesthetic; works on phones and desktops; no dependencies,
-no build step — just static files.
+Crumpled-paper aesthetic, guaranteed single-screen layout on phones and
+desktops, no dependencies, no build step — just static files.
 
-## Features
+## Recording
 
-- **Four tracks** with record, mute, volume, pan, per-track waveforms and
-  editable names.
-- **Projects** — keep as many demos as you like. The project browser (folder
-  icon) lists them with length, tempo and last-edited date; open any one to
-  keep working on it, or delete it. Everything auto-saves as you go.
-- **Themes** — eight paper themes (including the dark Graphite and Midnight),
-  six accent colors, and an adjustable paper-texture intensity, all in
-  Settings and remembered across sessions.
-- **Overdubbing** — recording plays the other tracks in sync, and takes are
-  automatically aligned (recorder spin-up and output latency are trimmed;
-  fine-tune in Settings if your device needs a nudge).
-- **Count-in** — one bar of clicks before each take.
-- **Metronome** with tap tempo and hold-to-repeat BPM steppers. Clicks never
-  end up in the mix.
-- **Undo per track** — the previous take is kept; tap ↩︎ to swap back.
-- **WAV export** — mixes all unmuted tracks offline (with automatic
-  peak-safe normalization) and downloads a 16-bit stereo WAV.
-- **Always fresh** — the service worker is network-first and re-checks for a
-  new version every time the app is opened or foregrounded, so installed
-  copies update themselves. It still works fully offline from the cache.
-- **Smart touches** — click/drag any waveform to scrub, screen wake-lock
-  while rolling, clip warning on hot takes.
-- **Keyboard shortcuts** — `Space` play/stop · `1`–`4` record a track ·
-  `M` metronome · `L` loop · `E` export · `Enter` return to start ·
-  `Esc` stop / close sheets.
+- **Four tracks** — tap ● to record; the armed track draws the live mic
+  waveform in red while you play. Takes are stored as centered mono, with
+  ~6ms de-click fades at the edges.
+- **Overdubbing** — recording plays the other tracks in sync; takes are
+  auto-aligned (recorder spin-up + output latency trimmed, fine-tune in
+  Settings). Punch in from wherever the playhead sits.
+- **Mic sensitivity** (25–400%) for quiet inputs; live level meter.
+- **Input monitor** — hear yourself (headphones!) via the MONITOR pill in
+  the header; stays on through recording and can be toggled mid-take.
+- **Count-in** — one bar of clicks before each take; the metronome button
+  is the master switch and silences the click even mid-recording.
+
+## Mixing & tracks
+
+Tap a track to open its options sheet: rename, volume (to 200%), pan,
+tone (dark↔bright tilt EQ), solo, mute, undo take, clear, and a
+zoomable/scrollable detail waveform. Drag horizontally on a track to
+scrub the timeline.
+
+## Sound
+
+- **Lo-Fi** — tape-crush over the whole mix (bandpass, saturation,
+  bitcrush, wow/flutter, gentle hiss) with Warm / Cassette / Radio /
+  Trashed presets and an intensity slider. Applied identically to
+  playback and export.
+- **Speaker Boost** — a loudness maximizer (drive → limiter → makeup →
+  soft-clip) that makes playback dramatically louder on tiny phone
+  speakers. Playback only; exports stay clean. Metronome and monitor are
+  routed through it too, so nothing sounds mysteriously quiet.
+
+## Tools
+
+- **Tuner** — chromatic autocorrelation tuner off the mic input (note,
+  octave, cents needle; green within ±5¢).
+- **Metronome** — tap tempo, hold-to-repeat BPM, beats-per-bar 2–12,
+  subdivisions (¼ ⅛ ⅛T 1/16), three accent levels.
+- **Loop** — whole song, or an A/B region set at the playhead (shown as a
+  band across the waveforms).
+- **Notes** — a free-text pad per project (lyrics, chords, tunings),
+  saved with the project and included in backups.
+
+## Projects
+
+Unlimited projects (folder icon): each keeps its own tracks, settings,
+loop region, and notes, auto-saved to IndexedDB as you go. Two-tap
+delete. **Back up / Import** moves a whole project between devices as a
+portable `.4track.json` (settings + 16-bit WAV per track).
+
+## Export & system
+
+- **WAV export** — offline mixdown of unmuted tracks (peak-safe
+  normalization), delivered through the native share sheet (Messages,
+  AirDrop, Files…) or saved as a download.
+- **Media Session** — lock-screen / headphone-remote play, pause, seek,
+  with position state.
+- **Always fresh** — network-first service worker plus an independent
+  version.json check that clears a wedged worker and reloads (never
+  mid-take). Fully offline-capable.
+- **Themes** — eight paper themes (incl. dark Graphite and Midnight), six
+  accents, texture-intensity slider.
+- **Safety** — screen wake-lock while rolling, close-tab warning during a
+  take, keyboard shortcuts guarded behind sheets, reduced-motion support.
+- **Shortcuts** — `Space` play/stop · `1`–`4` record track · `M`
+  metronome · `L` loop · `E` export · `Enter` return to start · `Esc`
+  stop / close sheets.
 
 ## Running
 
-Serve the folder over HTTPS (or localhost) — the microphone API requires a
-secure context:
+Serve the folder over HTTPS (or localhost) — the microphone API requires
+a secure context:
 
 ```sh
 python3 -m http.server 8000
 # open http://localhost:8000
 ```
 
-Install it from the browser's "Add to Home Screen" / "Install" prompt to get
-the standalone app experience.
+Install from the browser's "Add to Home Screen" / "Install" prompt.
 
-> Tip: use headphones when overdubbing, otherwise the mic will pick up the
-> other tracks and the metronome.
+> Tip: use headphones when overdubbing or monitoring, otherwise the mic
+> picks up the other tracks and the metronome.
 
 ## Development notes
 
-- `app.js` — all app logic (Web Audio playback/mixing, MediaRecorder
-  capture, metronome scheduler, projects + IndexedDB persistence, themes,
-  WAV encoder).
-- `style.css` — the crumpled-paper look and the theme definitions
-  (`:root[data-theme=…]` variable sets). The texture is an inline SVG
-  (`feTurbulence` + `feDiffuseLighting`) so there are no image assets.
-- `tools/make_icons.py` — regenerates the PNG icons from the same artwork
-  as `icons/icon.svg` (stdlib-only PNG encoder): `python3 tools/make_icons.py`.
+- `app.js` — all logic: Web Audio graph (tracks → tone → bus → [Lo-Fi] →
+  master → [Speaker Boost] → out), MediaRecorder capture, metronome
+  scheduler, tuner, projects/IndexedDB, themes, WAV encoder.
+- `style.css` — crumpled-paper look (inline SVG turbulence texture) and
+  the `:root[data-theme=…]` theme variable sets.
 - `sw.js` — network-first service worker. When releasing, bump `VERSION`
-  in `sw.js` (and `APP_VERSION` in `app.js` / the colophon) so old caches
-  are dropped and installed clients reload themselves.
+  in `sw.js`, `APP_VERSION` in `app.js`, and `version.json` together.
+- `tools/make_icons.py` — regenerates PNG icons (stdlib-only PNG encoder).

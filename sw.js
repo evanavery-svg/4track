@@ -1,10 +1,10 @@
 'use strict';
 
-/* Crumple service worker — network-first so every open picks up the latest
+/* 4track service worker — network-first so every open picks up the latest
    version, with the cache as an offline fallback. Bump VERSION on release. */
 
-const VERSION = '0.17';
-const CACHE = `crumple-v${VERSION}`;
+const VERSION = '0.18';
+const CACHE = `4track-v${VERSION}`;
 const ASSETS = [
   '.',
   'index.html',

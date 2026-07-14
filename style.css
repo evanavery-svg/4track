@@ -1,4 +1,4 @@
-/* Crumple — crumpled paper, minimalist, themeable */
+/* 4track — crumpled paper, minimalist, themeable */
 
 :root {
   --paper: #f2f1ee;
@@ -1115,4 +1115,14 @@ input[type="range"]::-moz-range-thumb {
   .wordmark { font-size: 21px; }
   .time-display { font-size: 26px; }
   .time-frac { font-size: 15px; }
+}
+
+/* ---------- accessibility ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
