@@ -147,18 +147,11 @@ body::before {
   margin-bottom: 3px;
 }
 
-@font-face {
-  font-family: "wm";
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-  src: url(data:font/woff2;base64,d09GMgABAAAAAASgAA8AAAAACXAAAARHAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGjAbgXgcgWIGYD9TVEFUKgBcEQgKhHiEFQE2AiQDKAsWAAQgBYQkByAb8gcInoNxm3xS0ZxGg7LdQlH4EIvgaT/avN3TvyeWHBKZTBSNZsmkmlRNNE8ksmgiuWTVeGtFTt0TmANATtgKILZ107KCcsKySggv/CHS9Jv8bwXofz9v4vN/zHQV9N8AK8SnBTaRyOLoAtmE9gYaeRm65/dOcIAndAck96ZDo40+l7kyExHp2b9AgC4wChIG4REtLYYKMSBEi3AoLiHQCBaHmVVU0R+220SlC7Y4oPYJEFub5S5oQIDAYWgwdAIRAw4ER4TwCF/D6MGBPRZCRQMA9RdQ/wP1GVB/1H/AJufIyYY3xs6kNiFEBeglyKtlkwGihpBU9qup6gsSYTisRerz23Lruro74blBFhvhv83SKiJsx6hOGTEgEEgYLAg8CNDGmy1vghpNCAQN4oxEgyq9vPs12P8ERvBBS4UWK74ianA00iblMY4WU/spPC6NpWN4SEdSPWAhLBNrERdBCGc435yFgPNIoORHk89oOUDBIIB4n46BKVgkXItyq2EUs7NVUgjQQyBaTDLZC9mgZ40/g1MCemgwVBKIGrWTKRV44fqkbrXFWsstiwoQqdL73AYwBLrAHfxBB8jzyQcI8x0qaVoJ6rYbLHxpHRwcMP/Bg5j28mHRx+Fbuvk3vM1b7j4sC57DIb2e7sgtoubkxUvmBQ+JmiNXMPW4aJTuIjXN/an91++7knzvHofuX7/5xFO/AVvv3St8SWWZvv8AnVkHfS70p+66HniE1H3kCbFNlChAk8JCNtEVq4yr6TQUtlmupyaWPTMzS5MWv52gn32Vl92Ji4KFovh4ocAcmDLXO+iYYHoiWo37q+qNOQ294rDDvt5hUv+Qv77kNOPAcZ/mxLy0WN2UoEleXssQ012ipOf31trWnkQXdyopbo7NMq8e55F5MtJoPBWYY9KZoOiUMXXXlHHe5xQi1R+HohuTZzjuOLDz3c+vdfvnHM9jzs+JKY57IwMzerKEO4me4Kbfi3efKE1cP3n9XGku4zs6UoJ8on7l73UfjimysnhY37c4Xh2EZ3Ov1M88seNqRkVG8dnlLQtsB072ILRJbZojs5nh0vBvz860U0OsxVTAQAyn0cwxBBJsfHdi6Ai7jH8aNn+Et6cD1/ENixr7VnXslXxhLbOBgAUw5f8qzKT9HIR8vMknjEh5MKYyxKQERbFQUVwynCbCM2ZzPEzZVroQAo3+eDU4v+dlDOgkY1FLJ7gNkInROTJD4wuZleUPmSOEQOZ5xkiSSlSMZwvoigvaFnjsTN16jCOzaCVR+IsjjKf99Sdp5q+fHqJGpC8m66a4rdpleA20DTRS3LlG8SJJN5kVgDDSKUUPqzQmJq0sytOjNIjRqFsnkxYd1koLUZd2oo8kTiQGTaxJuKO1Th+e0lhRb3Webh2axIkhDIvTFSmX7tPampsxGvoQafTvXrPmOsCi2+kvRf/CgwM1o5VFhNWNxQE=) format("woff2");
-}
 .wordmark {
-  font-family: "wm", -apple-system, "Segoe UI", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, "Segoe UI", Roboto, sans-serif;
   font-weight: 700;
-  font-size: 33px;
-  letter-spacing: -0.02em;
+  font-size: 32px;
+  letter-spacing: -0.03em;
   line-height: 1;
   color: var(--ink);
 }
