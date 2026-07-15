@@ -373,7 +373,7 @@ body::before {
   text-overflow: ellipsis;
 }
 
-.badge-mute, .badge-solo, .badge-tone {
+.badge-mute, .badge-solo, .badge-tone, .badge-gain {
   flex: none;
   font-size: 9px; font-weight: 700;
   letter-spacing: 0.05em; text-transform: uppercase;
@@ -383,7 +383,7 @@ body::before {
 }
 .badge-mute { color: var(--red); background: var(--red-soft); }
 .badge-solo { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
-.badge-tone { color: var(--ink-2); background: var(--paper); }
+.badge-tone, .badge-gain { color: var(--ink-2); background: var(--paper); }
 
 .track-dur {
   font-size: 11px;

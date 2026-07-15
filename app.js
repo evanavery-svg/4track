@@ -3,7 +3,7 @@
 /* 4track — a minimalist 4-track recorder.
    Web Audio + MediaRecorder, no dependencies. */
 
-const APP_VERSION = '0.18';
+const APP_VERSION = '0.19';
 const NUM_TRACKS = 4;
 const BEATS_PER_BAR = 4;
 
@@ -150,6 +150,7 @@ const app = {
   countIn: true,
   beatsPerBar: 4,       // time signature (top number)
   subdiv: 1,            // metronome subdivisions per beat (1,2,3,4)
+  autoLevel: true,      // normalize quiet takes to a healthy peak on save
   latencyMs: 0,
   nextTick: 0,
   schedTimer: null,
@@ -221,10 +222,13 @@ function ensureCtx() {
 
 const anySolo = () => app.tracks.some(t => t.solo);
 
+const dbToLin = (db) => Math.pow(10, (db || 0) / 20);
+const trackLinGain = (t) => t.volume * dbToLin(t.gain);   // volume (mix) x gain (dB boost)
+
 function applyTrackGain(t) {
   if (!t.gainNode) return;
   const silent = t.muted || (anySolo() && !t.solo);
-  t.gainNode.gain.setTargetAtTime(silent ? 0 : t.volume, app.ctx.currentTime, 0.015);
+  t.gainNode.gain.setTargetAtTime(silent ? 0 : trackLinGain(t), app.ctx.currentTime, 0.015);
   if (t.panNode) t.panNode.pan.setTargetAtTime(t.pan, app.ctx.currentTime, 0.015);
 }
 
@@ -849,11 +853,26 @@ async function finalizeTake(i) {
       d[pad + keep - 1 - k] *= gn;
     }
 
+    // Auto-level: quiet mics (EarPods etc.) capture takes at a fraction of
+    // full scale, and no amount of mix-volume rescues that cleanly. Bake in
+    // makeup gain so every take lands at a healthy peak (~0.9), capped at
+    // +24 dB so a silent room doesn't get boosted into pure noise.
+    let autoDb = 0;
+    if (app.autoLevel) {
+      let peak = 0;
+      for (let i = 0; i < d.length; i++) { const a = Math.abs(d[i]); if (a > peak) peak = a; }
+      if (peak > 0.001 && peak < 0.85) {
+        const g = Math.min(0.9 / peak, 16);
+        for (let i = 0; i < d.length; i++) d[i] *= g;
+        autoDb = Math.round(20 * Math.log10(g));
+      }
+    }
+
     const t = app.tracks[trackIdx];
     t.prevBuffer = t.buffer;
     t.buffer = out;
     if (t.buffer && peakOf(out) > 0.985) toast('Take saved — heads up, the input clipped');
-    else toast('Take saved');
+    else toast(autoDb >= 1 ? `Take saved · auto-leveled +${autoDb} dB` : 'Take saved');
     app.pos = app.recStartPos;   // rewind to the take's start, ready to audition
     refreshTrack(trackIdx);
     drawPlayheads();
@@ -1054,7 +1073,7 @@ async function exportMix() {
     if (!t.buffer || t.muted || (solo && !t.solo)) continue;
     const src = off.createBufferSource();
     src.buffer = t.buffer;
-    const g = off.createGain(); g.gain.value = t.volume;
+    const g = off.createGain(); g.gain.value = trackLinGain(t);
     const low = off.createBiquadFilter(); low.type = 'lowshelf'; low.frequency.value = 320; low.gain.value = -13 * (t.tone || 0);
     const high = off.createBiquadFilter(); high.type = 'highshelf'; high.frequency.value = 3200; high.gain.value = 13 * (t.tone || 0);
     src.connect(g); g.connect(low); low.connect(high);
@@ -1273,11 +1292,12 @@ function currentSettings() {
     projectName: $('#projectName').value,
     bpm: app.bpm, loop: app.loop, met: app.met, metRec: app.metRec,
     metVol: app.metVol, countIn: app.countIn, latencyMs: app.latencyMs,
+    autoLevel: app.autoLevel,
     loopA: app.loopA, loopB: app.loopB,
     beatsPerBar: app.beatsPerBar, subdiv: app.subdiv,
     notes: app.notes,
     lofi: app.lofi, lofiAmt: app.lofiAmt,
-    tracks: app.tracks.map(t => ({ name: t.name, volume: t.volume, pan: t.pan, muted: t.muted, solo: t.solo, tone: t.tone })),
+    tracks: app.tracks.map(t => ({ name: t.name, volume: t.volume, pan: t.pan, muted: t.muted, solo: t.solo, tone: t.tone, gain: t.gain })),
   };
 }
 
@@ -1322,6 +1342,7 @@ function applySettings(s) {
   app.metRec = !s || s.metRec !== false;
   app.metVol = (s && s.metVol) ?? 0.6;
   app.countIn = !s || s.countIn !== false;
+  app.autoLevel = !s || s.autoLevel !== false;
   app.latencyMs = (s && s.latencyMs) || 0;
   app.loopA = (s && s.loopA != null) ? s.loopA : null;
   app.loopB = (s && s.loopB != null) ? s.loopB : null;
@@ -1334,7 +1355,7 @@ function applySettings(s) {
     if (!app.tracks[i]) return;
     Object.assign(app.tracks[i], {
       name: m.name, volume: m.volume, pan: m.pan, muted: m.muted,
-      solo: !!m.solo, tone: m.tone || 0,
+      solo: !!m.solo, tone: m.tone || 0, gain: m.gain || 0,
     });
   });
 }
@@ -1359,7 +1380,7 @@ async function openProject(id, { quiet = false } = {}) {
     const t = app.tracks[i];
     t.prevBuffer = undefined;
     t.buffer = await decodeStoredAudio(await idb.get(projKey(id, `audio${i}`)));
-    if (!s || !s.tracks || !s.tracks[i]) Object.assign(t, { name: `Track ${i + 1}`, volume: 0.9, pan: 0, muted: false, solo: false, tone: 0 });
+    if (!s || !s.tracks || !s.tracks[i]) Object.assign(t, { name: `Track ${i + 1}`, volume: 0.9, pan: 0, muted: false, solo: false, tone: 0, gain: 0 });
     if (t.gainNode) { applyTrackGain(t); applyTone(t); }
     refreshTrack(i);
   }
@@ -1384,7 +1405,7 @@ async function createProject({ quiet = false } = {}) {
     const t = app.tracks[i];
     t.buffer = null;
     t.prevBuffer = undefined;
-    Object.assign(t, { name: `Track ${i + 1}`, volume: 0.9, pan: 0, muted: false, solo: false, tone: 0 });
+    Object.assign(t, { name: `Track ${i + 1}`, volume: 0.9, pan: 0, muted: false, solo: false, tone: 0, gain: 0 });
     if (t.gainNode) { applyTrackGain(t); applyTone(t); }
     refreshTrack(i);
   }
@@ -1510,7 +1531,7 @@ function buildTracks() {
   for (let i = 0; i < NUM_TRACKS; i++) {
     const t = {
       buffer: null, prevBuffer: undefined,
-      name: `Track ${i + 1}`, volume: 0.9, pan: 0, muted: false, solo: false, tone: 0,
+      name: `Track ${i + 1}`, volume: 0.9, pan: 0, muted: false, solo: false, tone: 0, gain: 0,
       gainNode: null, panNode: null, toneLow: null, toneHigh: null, ui: {},
     };
     app.tracks.push(t);
@@ -1526,6 +1547,7 @@ function buildTracks() {
           <span class="badge-solo" hidden>solo</span>
           <span class="badge-mute" hidden>muted</span>
           <span class="badge-tone" hidden></span>
+          <span class="badge-gain" hidden></span>
           <span class="track-dur"></span>
           <svg class="chev" viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </div>
@@ -1554,6 +1576,7 @@ function buildTracks() {
       badgeSolo: $('.badge-solo', el),
       badgeMute: $('.badge-mute', el),
       badgeTone: $('.badge-tone', el),
+      badgeGain: $('.badge-gain', el),
       dur: $('.track-dur', el),
       recTime: $('.rec-time', el),
     };
@@ -1603,6 +1626,9 @@ function refreshTrack(i) {
   const tv = Math.round((t.tone || 0) * 100);
   t.ui.badgeTone.hidden = tv === 0;
   t.ui.badgeTone.textContent = tv > 0 ? `+${tv} bright` : `${tv} dark`;
+  const gv = Math.round(t.gain || 0);
+  t.ui.badgeGain.hidden = gv === 0;
+  t.ui.badgeGain.textContent = `${gv > 0 ? '+' : ''}${gv} dB`;
   t.ui.dur.textContent = t.buffer ? fmtTime(t.buffer.duration) : '';
   t.ui.meter.style.transform = 'scaleX(0)';
   if (app.sheetTrack === i && !$('#trackSheet').hidden) syncTrackSheet(i);
@@ -1664,6 +1690,7 @@ function syncSettingsUI() {
   $('#setMicGain').value = Math.round((app.prefs.micGain ?? 1) * 100);
   $('#micGainLabel').textContent = `${Math.round((app.prefs.micGain ?? 1) * 100)}%`;
   $('#setCountIn').checked = app.countIn;
+  $('#setAutoLevel').checked = app.autoLevel;
   $('#setMetRec').checked = app.metRec;
   $('#setMetVol').value = Math.round(app.metVol * 100);
   $('#setLatency').value = app.latencyMs;
@@ -1780,6 +1807,8 @@ function syncTrackSheet(i) {
   $('#tsDur').textContent = t.buffer ? fmtTime(t.buffer.duration) : 'empty';
   $('#tsVol').value = Math.round(t.volume * 100);
   $('#tsVolLabel').textContent = `${Math.round(t.volume * 100)}%`;
+  $('#tsGain').value = Math.round(t.gain || 0);
+  $('#tsGainLabel').textContent = `${(t.gain || 0) > 0 ? '+' : ''}${Math.round(t.gain || 0)} dB`;
   $('#tsPan').value = Math.round(t.pan * 100);
   $('#tsPanLabel').textContent = panLabel(t.pan);
   $('#tsTone').value = Math.round((t.tone || 0) * 100);
@@ -1817,6 +1846,13 @@ function wireTrackSheet() {
     $('#tsVolLabel').textContent = `${Math.round(t.volume * 100)}%`;
     if (app.ctx) applyTrackGain(t);
     saveSettingsSoon();
+  });
+  $('#tsGain').addEventListener('input', () => {
+    const t = cur(); if (!t) return;
+    t.gain = +$('#tsGain').value;
+    $('#tsGainLabel').textContent = `${t.gain > 0 ? '+' : ''}${t.gain} dB`;
+    if (app.ctx) applyTrackGain(t);
+    refreshTrack(app.sheetTrack); saveSettingsSoon();
   });
   $('#tsPan').addEventListener('input', () => {
     const t = cur(); if (!t) return;
@@ -1924,6 +1960,7 @@ function wireSheets() {
     applyMicGain(); savePrefs();
   });
   $('#setCountIn').addEventListener('change', (e) => { app.countIn = e.target.checked; saveSettingsSoon(); });
+  $('#setAutoLevel').addEventListener('change', (e) => { app.autoLevel = e.target.checked; saveSettingsSoon(); });
   $('#setMetRec').addEventListener('change', (e) => { app.metRec = e.target.checked; saveSettingsSoon(); });
   $('#setMetVol').addEventListener('input', (e) => { app.metVol = e.target.value / 100; saveSettingsSoon(); });
   $('#setLatency').addEventListener('input', (e) => {

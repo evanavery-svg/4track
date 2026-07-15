@@ -157,6 +157,10 @@
       <input type="range" id="tsVol" min="0" max="200" value="90" aria-label="Volume">
     </label>
     <label class="set-row">
+      <span>Gain <small id="tsGainLabel">0 dB</small></span>
+      <input type="range" id="tsGain" min="-12" max="24" value="0" step="1" aria-label="Gain">
+    </label>
+    <label class="set-row">
       <span>Pan <small id="tsPanLabel">center</small></span>
       <input type="range" id="tsPan" min="-100" max="100" value="0" aria-label="Pan">
     </label>
@@ -243,7 +247,11 @@
     <h3>Recording</h3>
     <label class="set-row">
       <span>Mic sensitivity <small id="micGainLabel">100%</small></span>
-      <input type="range" id="setMicGain" min="25" max="400" step="5" value="100">
+      <input type="range" id="setMicGain" min="25" max="800" step="5" value="100">
+    </label>
+    <label class="set-row">
+      <span>Auto-level takes <small>boost quiet recordings to a healthy volume</small></span>
+      <input type="checkbox" id="setAutoLevel" class="switch" checked>
     </label>
     <label class="set-row">
       <span>Count-in <small>one bar of clicks before recording</small></span>
