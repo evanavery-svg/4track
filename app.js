@@ -3,9 +3,10 @@
 /* 4track — a minimalist 4-track recorder.
    Web Audio + MediaRecorder, no dependencies. */
 
-const APP_VERSION = '0.19';
+const APP_VERSION = '0.20';
 const NUM_TRACKS = 4;
 const BEATS_PER_BAR = 4;
+const LIVE_PEAK_CAP = 2000;   // max live-waveform samples held during a take
 
 const THEMES = {
   paper:    { label: 'Paper',    sw: ['#f2f1ee', '#ffffff', '#1c1c1e'] },
@@ -133,6 +134,9 @@ const app = {
   recStartPos: 0,       // timeline position the take is punched in at
   recDiscard: false,
   livePeaks: [],        // {p: timeline pos, v: peak} sampled while recording
+  liveSlotStart: 0,     // start of the slot currently accumulating
+  liveSlotPeak: 0,      // running max within that slot
+  liveSlotSec: 0.04,    // slot width; doubles when livePeaks hits the cap
 
   state: 'idle',        // idle | playing | recording
   pos: 0,               // timeline position in seconds
@@ -521,15 +525,37 @@ function tunerDetect() {
 
 /* ---------------- transport ---------------- */
 
-function stopSources() {
+/* Cutting buffer sources dead mid-waveform pops, so the master is briefly
+   ducked around the cut. When playback is about to resume (seek, loop wrap,
+   punch-in) `resumeAt` is the ctx time the new sources start: the duck is
+   compressed into that gap and pinned back to unity exactly at resumeAt, so
+   there's no dropout. With no resumeAt this is a real stop, and the gentler
+   longer release is fine because nothing follows it. */
+function stopSources(resumeAt) {
   if (!app.sources.length) return;
   if (app.ctx && app.master) {
-    // brief master duck so stopping/seeking doesn't pop
     const now = app.ctx.currentTime;
-    app.master.gain.cancelScheduledValues(now);
-    app.master.gain.setTargetAtTime(0.0001, now, 0.004);
-    app.master.gain.setTargetAtTime(1, now + 0.05, 0.012);
-    for (const s of app.sources) { try { s.stop(now + 0.03); } catch (_) {} }
+    const g = app.master.gain;
+    g.cancelScheduledValues(now);
+    g.setValueAtTime(g.value, now);
+    // Splice: keep the outgoing audio running right up to the moment the new
+    // sources start, and dip only across the seam. Stopping early (or holding
+    // the master down until the resume point) leaves a silent gap, which on a
+    // loop wrap is an audible dropout every repetition.
+    const splice = resumeAt && resumeAt > now ? Math.min(resumeAt, now + 0.12) : 0;
+    if (splice) {
+      const dipStart = Math.max(now + 0.001, splice - 0.005);
+      // hold full level until the seam, then dip only across it, so the loop
+      // point isn't a long audible fade — just a couple of ms of anti-click
+      g.setValueAtTime(g.value, Math.max(now, dipStart - 0.004));
+      g.linearRampToValueAtTime(0.0001, dipStart);
+      g.linearRampToValueAtTime(1, splice + 0.005);
+      for (const s of app.sources) { try { s.stop(splice); } catch (_) {} }
+    } else {
+      g.linearRampToValueAtTime(0.0001, now + 0.012);
+      g.setTargetAtTime(1, now + 0.05, 0.012);
+      for (const s of app.sources) { try { s.stop(now + 0.03); } catch (_) {} }
+    }
   } else {
     for (const s of app.sources) { try { s.stop(); } catch (_) {} }
   }
@@ -537,7 +563,7 @@ function stopSources() {
 }
 
 function startSources(fromPos, atCtxTime, exceptTrack = -1) {
-  stopSources();
+  stopSources(atCtxTime);
   for (let i = 0; i < NUM_TRACKS; i++) {
     const t = app.tracks[i];
     if (i === exceptTrack || !t.buffer || t.buffer.duration <= fromPos) continue;
@@ -797,6 +823,9 @@ async function toggleRecord(i) {
   app.recT0 = t0;
   app.recTrack = i;
   app.livePeaks = [];
+  app.liveSlotStart = app.pos;
+  app.liveSlotPeak = 0;
+  app.liveSlotSec = 0.04;
   startSources(app.recStartPos, t0, i);
   app.playStartCtx = t0;
   app.playStartPos = app.recStartPos;
@@ -816,6 +845,7 @@ function stopRecordingInternal(discard) {
 async function finalizeTake(i) {
   const chunks = app.recChunks;
   const trackIdx = app.recTrack;
+  const owner = app.projectId;   // decoding below is async; don't land the take in a different project
   app.recTrack = -1;
   updateTransportUI();
   if (app.recDiscard || !chunks.length || trackIdx !== i) { redrawAllWaves(); return; }
@@ -823,6 +853,10 @@ async function finalizeTake(i) {
   try {
     const blob = new Blob(chunks, { type: chunks[0].type });
     const raw = await app.ctx.decodeAudioData(await blob.arrayBuffer());
+    if (owner !== app.projectId) {   // user switched projects while this decoded
+      toast('Take discarded — project changed mid-recording');
+      return;
+    }
 
     // Smart alignment: drop the stretch captured before the timeline started
     // (recorder spin-up + count-in) plus the output latency, so overdubs land in sync.
@@ -1013,7 +1047,23 @@ function updateMeter() {
   let peak = 0;
   for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > peak) peak = a; }
   t.ui.meter.style.transform = `scaleX(${clamp(peak * 1.15, 0, 1)})`;
-  if (app.pos > app.recStartPos) app.livePeaks.push({ p: app.pos, v: peak });
+
+  // Sample into time slots instead of once per frame, and halve the resolution
+  // whenever the cap is hit. Keeps the full time range at drawable detail while
+  // bounding memory — a per-frame push reached tens of thousands of objects on
+  // a long take.
+  if (app.pos > app.recStartPos) {
+    if (peak > app.liveSlotPeak) app.liveSlotPeak = peak;
+    if (app.pos - app.liveSlotStart >= app.liveSlotSec) {
+      app.livePeaks.push({ p: app.pos, v: app.liveSlotPeak });
+      app.liveSlotStart = app.pos;
+      app.liveSlotPeak = 0;
+      if (app.livePeaks.length >= LIVE_PEAK_CAP) {
+        app.livePeaks = app.livePeaks.filter((_, k) => k % 2 === 0);   // decimate, keep the span
+        app.liveSlotSec *= 2;
+      }
+    }
+  }
 }
 
 /* Live waveform on the armed track while recording — draw what the mic hears. */
@@ -1304,11 +1354,17 @@ function currentSettings() {
 let saveTimer = null;
 function saveSettingsSoon() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveSettings, 350);
+  // Remember which project this debounced save belongs to. If the user switches
+  // projects before it fires, the in-memory state no longer describes that
+  // project and writing it would clobber the newly-opened one.
+  const armedFor = app.projectId;
+  saveTimer = setTimeout(() => saveSettings(armedFor), 350);
 }
+function cancelPendingSave() { clearTimeout(saveTimer); saveTimer = null; }
 
-async function saveSettings() {
+async function saveSettings(expectedId) {
   if (!app.projectId) return;
+  if (expectedId && expectedId !== app.projectId) return;   // stale: project changed under us
   try {
     await idb.set(projKey(app.projectId, 'settings'), currentSettings());
     const meta = {
@@ -1327,10 +1383,13 @@ async function saveSettings() {
 
 async function saveTrackAudio(i) {
   if (!app.projectId) return;
+  const owner = app.projectId;                 // pin the target; encoding below is async
   const t = app.tracks[i];
   try {
-    if (t.buffer) await idb.set(projKey(app.projectId, `audio${i}`), { sr: t.buffer.sampleRate, wav: bufferToWav(t.buffer, true) });
-    else await idb.del(projKey(app.projectId, `audio${i}`));
+    const rec = t.buffer ? { sr: t.buffer.sampleRate, wav: bufferToWav(t.buffer, true) } : null;
+    if (owner !== app.projectId) return;       // switched mid-encode — don't write into the new project
+    if (rec) await idb.set(projKey(owner, `audio${i}`), rec);
+    else await idb.del(projKey(owner, `audio${i}`));
   } catch (_) { toast('Auto-save failed — storage may be full'); }
 }
 
@@ -1371,10 +1430,15 @@ async function decodeStoredAudio(rec) {
 async function openProject(id, { quiet = false } = {}) {
   stopAll();
   if (app.projectId && app.projectId !== id) await saveSettings();
+  cancelPendingSave();   // any debounced edit belongs to the outgoing project
 
+  // Read first, THEN swap id + state together. Assigning app.projectId before
+  // this await would leave the id pointing at the new project while memory
+  // still held the old one's state — any save landing in that window wrote the
+  // wrong project's data over this one.
+  const s = await idb.get(projKey(id, 'settings'));
   app.projectId = id;
   app.pos = 0;
-  const s = await idb.get(projKey(id, 'settings'));
   applySettings(s);
   for (let i = 0; i < NUM_TRACKS; i++) {
     const t = app.tracks[i];
@@ -1397,6 +1461,7 @@ async function openProject(id, { quiet = false } = {}) {
 async function createProject({ quiet = false } = {}) {
   stopAll();
   if (app.projectId) await saveSettings();
+  cancelPendingSave();   // any debounced edit belongs to the outgoing project
 
   app.projectId = newProjectId();
   app.pos = 0;

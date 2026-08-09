@@ -3,7 +3,7 @@
 /* 4track service worker — network-first so every open picks up the latest
    version, with the cache as an offline fallback. Bump VERSION on release. */
 
-const VERSION = '0.19';
+const VERSION = '0.20';
 const CACHE = `4track-v${VERSION}`;
 const ASSETS = [
   '.',
